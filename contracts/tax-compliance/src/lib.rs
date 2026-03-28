@@ -446,8 +446,13 @@ mod tax_compliance {
                 tax_due,
             });
 
-            let snapshot =
-                self.build_snapshot(property_id, jurisdiction.code, &rule, &assessment, Some(record));
+            let snapshot = self.build_snapshot(
+                property_id,
+                jurisdiction.code,
+                &rule,
+                &assessment,
+                Some(record),
+            );
             self.emit_registry_sync_requested(snapshot);
 
             Ok(record)
@@ -496,8 +501,13 @@ mod tax_compliance {
                 outstanding_tax: self.outstanding_tax(&record),
             });
 
-            let snapshot =
-                self.build_snapshot(property_id, jurisdiction.code, &rule, &assessment, Some(record));
+            let snapshot = self.build_snapshot(
+                property_id,
+                jurisdiction.code,
+                &rule,
+                &assessment,
+                Some(record),
+            );
             self.emit_registry_sync_requested(snapshot);
 
             Ok(record)
@@ -544,8 +554,13 @@ mod tax_compliance {
                 report_hash,
             });
 
-            let snapshot =
-                self.build_snapshot(property_id, jurisdiction.code, &rule, &assessment, Some(record));
+            let snapshot = self.build_snapshot(
+                property_id,
+                jurisdiction.code,
+                &rule,
+                &assessment,
+                Some(record),
+            );
             self.emit_registry_sync_requested(snapshot);
 
             Ok(())
