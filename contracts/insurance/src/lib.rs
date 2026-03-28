@@ -3,7 +3,8 @@
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::needless_borrows_for_generic_args
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments
 )]
 
 use ink::storage::Mapping;
@@ -1543,7 +1544,6 @@ pub use crate::propchain_insurance::{InsuranceError, PropertyInsurance};
 
 #[cfg(test)]
 mod insurance_tests {
-    use super::*;
     use ink::env::{test, DefaultEnvironment};
 
     use crate::propchain_insurance::{

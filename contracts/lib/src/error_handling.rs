@@ -230,7 +230,7 @@ impl ErrorLogger {
             if let Some((_, rate)) = self.error_rates.iter_mut().find(|(c, _)| *c == code) {
                 rate.increment(current_timestamp);
             } else {
-                let mut rate = ErrorRate::new(3600_000); // 1 hour window
+                let mut rate = ErrorRate::new(3_600_000); // 1 hour window
                 rate.increment(current_timestamp);
                 self.error_rates.push((error_info.code.clone(), rate));
             }
@@ -287,7 +287,7 @@ impl ErrorLogger {
     }
 }
 
-/// Helper functions for creating common error types
+// Helper functions for creating common error types
 
 /// Create a user error with recovery suggestions
 pub fn user_error(

@@ -2,6 +2,11 @@
 #![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::upper_case_acronyms)]
+#![allow(
+    clippy::upper_case_acronyms,
+    clippy::too_many_arguments,
+    clippy::needless_borrows_for_generic_args
+)]
 
 use propchain_traits::ComplianceChecker;
 use propchain_traits::*;

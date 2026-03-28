@@ -1,11 +1,8 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
-#![allow(clippy::new_without_default)]
-
-use ink::prelude::vec::Vec;
+#![allow(clippy::new_without_default, clippy::needless_borrows_for_generic_args)]
 
 #[ink::contract]
 mod propchain_prediction_market {
-    use super::*;
     use ink::storage::Mapping;
 
     #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
@@ -73,16 +70,16 @@ mod propchain_prediction_market {
         admin: AccountId,
         markets: Mapping<u64, PredictionMarketInfo>,
         market_count: u64,
-        
+
         // market_id -> (user -> Stake)
         stakes: Mapping<(u64, AccountId), Stake>,
-        
+
         // user -> UserReputation
         reputations: Mapping<AccountId, UserReputation>,
-        
+
         // Oracle for resolution (simplified)
         oracle_address: Option<AccountId>,
-        
+
         // Protocol fee basis points
         fee_bips: u32,
     }
@@ -177,7 +174,7 @@ mod propchain_prediction_market {
             resolution_time: u64,
         ) -> Result<u64, Error> {
             self.ensure_admin()?;
-            
+
             let market_id = self.market_count;
             self.market_count += 1;
 
@@ -194,7 +191,7 @@ mod propchain_prediction_market {
             };
 
             self.markets.insert(&market_id, &market);
-            
+
             self.env().emit_event(MarketCreated {
                 market_id,
                 property_id,
@@ -218,7 +215,7 @@ mod propchain_prediction_market {
             }
 
             let mut market = self.markets.get(&market_id).ok_or(Error::MarketNotFound)?;
-            
+
             if market.status != MarketStatus::Active {
                 return Err(Error::MarketNotActive);
             }
@@ -238,7 +235,7 @@ mod propchain_prediction_market {
             // For simplicity, enforce same direction if adding stake
             if existing_stake.amount > 0 && existing_stake.direction != direction {
                 // User cannot hedge in this simple version
-                return Err(Error::InvalidAmount); 
+                return Err(Error::InvalidAmount);
             }
 
             existing_stake.amount += amount;
@@ -263,9 +260,13 @@ mod propchain_prediction_market {
         }
 
         #[ink(message)]
-        pub fn resolve_market(&mut self, market_id: u64, resolved_value: u128) -> Result<(), Error> {
+        pub fn resolve_market(
+            &mut self,
+            market_id: u64,
+            resolved_value: u128,
+        ) -> Result<(), Error> {
             self.ensure_admin()?; // In production, this should ideally be called by the Oracle directly or query the oracle.
-            
+
             let mut market = self.markets.get(&market_id).ok_or(Error::MarketNotFound)?;
             if market.status != MarketStatus::Active {
                 return Err(Error::MarketAlreadyResolved);
@@ -299,13 +300,13 @@ mod propchain_prediction_market {
         pub fn claim_reward(&mut self, market_id: u64) -> Result<(), Error> {
             let caller = self.env().caller();
             let market = self.markets.get(&market_id).ok_or(Error::MarketNotFound)?;
-            
+
             if market.status != MarketStatus::Resolved {
                 return Err(Error::MarketNotActive); // Need better error naming
             }
 
             let winning_dir = market.winning_direction.as_ref().unwrap();
-            
+
             let key = (market_id, caller);
             let mut stake = self.stakes.get(&key).ok_or(Error::StakeNotFound)?;
 
@@ -327,13 +328,13 @@ mod propchain_prediction_market {
             // Proportion of the winning pool
             // total_reward = user_stake + (user_stake * losing_pool) / winning_pool
             let total_reward = stake.amount + (stake.amount * losing_pool) / winning_pool;
-            
+
             let fee = (total_reward * self.fee_bips as u128) / 10000;
             let final_payout = total_reward.saturating_sub(fee);
 
             stake.claimed = true;
             self.stakes.insert(&key, &stake);
-            
+
             // Record good reputation
             self.update_reputation(caller, true);
 
@@ -359,7 +360,7 @@ mod propchain_prediction_market {
                 accuracy_score: 0,
             })
         }
-        
+
         #[ink(message)]
         pub fn get_market(&self, market_id: u64) -> Option<PredictionMarketInfo> {
             self.markets.get(&market_id)
@@ -373,7 +374,7 @@ mod propchain_prediction_market {
             model_version: String,
         ) -> Result<(), Error> {
             self.ensure_admin()?;
-            
+
             // In a full implementation, this could verify ZK proofs or store the backtest mapping.
             // For now we simulate accepting the validation and emitting an event.
             self.env().emit_event(BacktestValidated {
@@ -386,14 +387,15 @@ mod propchain_prediction_market {
 
         fn update_reputation(&mut self, user: AccountId, success: bool) {
             let mut rep = self.get_user_reputation(user);
-            // Don't count multiple claims from same market as multiple successes, 
+            // Don't count multiple claims from same market as multiple successes,
             // but for simplicity our claim logic is 1-to-1 with market right now.
             rep.total_predictions += 1;
             if success {
                 rep.successful_predictions += 1;
             }
             // score out of 10000
-            rep.accuracy_score = ((rep.successful_predictions as u64 * 10000) / rep.total_predictions as u64) as u32;
+            rep.accuracy_score =
+                ((rep.successful_predictions as u64 * 10000) / rep.total_predictions as u64) as u32;
             self.reputations.insert(&user, &rep);
         }
 
@@ -415,15 +417,15 @@ mod propchain_prediction_market {
             let contract = PredictionMarket::new(accounts.alice, 100);
             assert_eq!(contract.admin, accounts.alice);
         }
-        
+
         #[ink::test]
         fn market_creation_works() {
             let accounts = ink::env::test::default_accounts::<ink::env::DefaultEnvironment>();
             let mut contract = PredictionMarket::new(accounts.alice, 100);
-            
+
             let market_id = contract.create_market(1, 500_000, 1000).unwrap();
             assert_eq!(market_id, 0);
-            
+
             let market = contract.get_market(market_id).unwrap();
             assert_eq!(market.target_value, 500_000);
             assert_eq!(market.status, MarketStatus::Active);

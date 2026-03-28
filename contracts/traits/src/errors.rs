@@ -15,6 +15,10 @@ use scale_info::TypeInfo;
 /// =============================================================================
 /// Base Error Trait
 /// =============================================================================
+// =============================================================================
+// Base Error Trait
+// =============================================================================
+
 /// Base trait for all PropChain contract errors.
 /// All contract-specific error enums must implement this trait.
 pub trait ContractError: fmt::Debug + fmt::Display + Encode + Decode {
@@ -35,6 +39,8 @@ pub trait ContractError: fmt::Debug + fmt::Display + Encode + Decode {
             4000..=4999 => ErrorCategory::Oracle,
             5000..=5999 => ErrorCategory::Fees,
             6000..=6999 => ErrorCategory::Compliance,
+            7000..=7999 => ErrorCategory::Governance,
+            8000..=8999 => ErrorCategory::Staking,
             _ => ErrorCategory::Unknown,
         }
     }
@@ -51,6 +57,8 @@ pub enum ErrorCategory {
     Oracle,
     Fees,
     Compliance,
+    Governance,
+    Staking,
     Unknown,
 }
 
@@ -64,6 +72,8 @@ impl fmt::Display for ErrorCategory {
             ErrorCategory::Oracle => write!(f, "Oracle"),
             ErrorCategory::Fees => write!(f, "Fees"),
             ErrorCategory::Compliance => write!(f, "Compliance"),
+            ErrorCategory::Governance => write!(f, "Governance"),
+            ErrorCategory::Staking => write!(f, "Staking"),
             ErrorCategory::Unknown => write!(f, "Unknown"),
         }
     }
@@ -72,6 +82,10 @@ impl fmt::Display for ErrorCategory {
 /// =============================================================================
 /// Common Error Variants
 /// =============================================================================
+// =============================================================================
+// Common Error Variants
+// =============================================================================
+
 /// Common error variants that can be used across multiple contracts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
@@ -147,6 +161,10 @@ impl ContractError for CommonError {
 /// =============================================================================
 /// Error Code Constants
 /// =============================================================================
+// =============================================================================
+// Error Code Constants
+// =============================================================================
+
 /// Common error codes (1-999)
 pub mod common_codes {
     pub const UNAUTHORIZED: u32 = 1;
@@ -187,6 +205,7 @@ pub mod property_token_codes {
     pub const PROPOSAL_NOT_FOUND: u32 = 1022;
     pub const PROPOSAL_CLOSED: u32 = 1023;
     pub const ASK_NOT_FOUND: u32 = 1024;
+    pub const BATCH_SIZE_EXCEEDED: u32 = 1025;
 }
 
 /// Escrow error codes (2000-2999)
@@ -256,4 +275,35 @@ pub mod compliance_codes {
     pub const COMPLIANCE_CHECK_FAILED: u32 = 6003;
     pub const COMPLIANCE_DOCUMENT_MISSING: u32 = 6004;
     pub const COMPLIANCE_EXPIRED: u32 = 6005;
+}
+
+/// Governance error codes (7000-7999)
+pub mod governance_codes {
+    pub const GOVERNANCE_UNAUTHORIZED: u32 = 7001;
+    pub const GOVERNANCE_PROPOSAL_NOT_FOUND: u32 = 7002;
+    pub const GOVERNANCE_ALREADY_VOTED: u32 = 7003;
+    pub const GOVERNANCE_PROPOSAL_CLOSED: u32 = 7004;
+    pub const GOVERNANCE_THRESHOLD_NOT_MET: u32 = 7005;
+    pub const GOVERNANCE_TIMELOCK_ACTIVE: u32 = 7006;
+    pub const GOVERNANCE_INVALID_THRESHOLD: u32 = 7007;
+    pub const GOVERNANCE_SIGNER_EXISTS: u32 = 7008;
+    pub const GOVERNANCE_SIGNER_NOT_FOUND: u32 = 7009;
+    pub const GOVERNANCE_MIN_SIGNERS: u32 = 7010;
+    pub const GOVERNANCE_MAX_PROPOSALS: u32 = 7011;
+    pub const GOVERNANCE_NOT_A_SIGNER: u32 = 7012;
+    pub const GOVERNANCE_PROPOSAL_EXPIRED: u32 = 7013;
+}
+
+/// Staking error codes (8000-8999)
+pub mod staking_codes {
+    pub const STAKING_UNAUTHORIZED: u32 = 8001;
+    pub const STAKING_INSUFFICIENT_AMOUNT: u32 = 8002;
+    pub const STAKING_NOT_FOUND: u32 = 8003;
+    pub const STAKING_LOCK_ACTIVE: u32 = 8004;
+    pub const STAKING_NO_REWARDS: u32 = 8005;
+    pub const STAKING_INSUFFICIENT_POOL: u32 = 8006;
+    pub const STAKING_INVALID_CONFIG: u32 = 8007;
+    pub const STAKING_ALREADY_STAKED: u32 = 8008;
+    pub const STAKING_INVALID_DELEGATE: u32 = 8009;
+    pub const STAKING_ZERO_AMOUNT: u32 = 8010;
 }

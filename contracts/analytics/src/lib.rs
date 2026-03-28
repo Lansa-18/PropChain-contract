@@ -200,7 +200,7 @@ mod propchain_analytics {
             bear_volume: u128,
         ) {
             self.ensure_admin(); // Prediction market or admin updates this
-            
+
             let total_volume = bull_volume + bear_volume;
             let ratio = if total_volume > 0 {
                 ((bull_volume * 10000) / total_volume) as u32
@@ -215,14 +215,22 @@ mod propchain_analytics {
             };
 
             self.property_sentiments.insert(property_id, &new_sentiment);
-            
+
             // Update overall recursively or by moving average
-            self.overall_sentiment.bull_volume = self.overall_sentiment.bull_volume.saturating_add(bull_volume);
-            self.overall_sentiment.bear_volume = self.overall_sentiment.bear_volume.saturating_add(bear_volume);
-            
-            let total_overall = self.overall_sentiment.bull_volume + self.overall_sentiment.bear_volume;
+            self.overall_sentiment.bull_volume = self
+                .overall_sentiment
+                .bull_volume
+                .saturating_add(bull_volume);
+            self.overall_sentiment.bear_volume = self
+                .overall_sentiment
+                .bear_volume
+                .saturating_add(bear_volume);
+
+            let total_overall =
+                self.overall_sentiment.bull_volume + self.overall_sentiment.bear_volume;
             if total_overall > 0 {
-                self.overall_sentiment.bull_bear_ratio_bips = ((self.overall_sentiment.bull_volume * 10000) / total_overall) as u32;
+                self.overall_sentiment.bull_bear_ratio_bips =
+                    ((self.overall_sentiment.bull_volume * 10000) / total_overall) as u32;
             }
         }
 

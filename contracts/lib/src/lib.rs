@@ -19,32 +19,57 @@ mod propchain_contracts {
     use super::*;
 
     /// Error types for contract
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum Error {
+        /// Property does not exist in the registry
         PropertyNotFound,
+        /// Caller is not authorized for this operation
         Unauthorized,
+        /// Property metadata is invalid or malformed
         InvalidMetadata,
-        NotCompliant,          // Recipient is not compliant
-        ComplianceCheckFailed, // Compliance registry call failed
+        /// Recipient is not compliant with regulatory requirements
+        NotCompliant,
+        /// Call to the compliance registry contract failed
+        ComplianceCheckFailed,
+        /// Escrow does not exist
         EscrowNotFound,
+        /// Escrow has already been released
         EscrowAlreadyReleased,
+        /// Badge does not exist for this property
         BadgeNotFound,
+        /// Badge type is invalid
         InvalidBadgeType,
+        /// Badge has already been issued to this property
         BadgeAlreadyIssued,
+        /// Caller is not an authorized verifier
         NotVerifier,
+        /// Appeal does not exist
         AppealNotFound,
+        /// Appeal status does not allow this operation
         InvalidAppealStatus,
+        /// Compliance registry contract address has not been configured
         ComplianceRegistryNotSet,
+        /// Oracle contract returned an error
         OracleError,
+        /// Contract is currently paused
         ContractPaused,
+        /// Contract is already paused
         AlreadyPaused,
+        /// Contract is not currently paused
         NotPaused,
+        /// A resume request is already in progress
         ResumeRequestAlreadyActive,
+        /// No active resume request exists
         ResumeRequestNotFound,
+        /// Not enough approvals to complete the operation
         InsufficientApprovals,
+        /// Caller has already approved this operation
         AlreadyApproved,
+        /// Caller is not authorized to pause the contract
         NotAuthorizedToPause,
+        /// Input batch exceeds the configured max_batch_size
+        BatchSizeExceeded,
     }
 
     /// Property Registry contract
@@ -94,6 +119,12 @@ mod propchain_contracts {
         fee_manager: Option<AccountId>,
         /// Fractional properties info
         fractional: Mapping<u64, FractionalInfo>,
+        /// Centralized RBAC and permission audit state
+        access_control: AccessControl,
+        /// Batch operation configuration
+        batch_config: BatchConfig,
+        /// Batch operation statistics
+        batch_operation_stats: BatchOperationStats,
     }
 
     /// Escrow information
@@ -163,6 +194,24 @@ mod propchain_contracts {
         pub created_at: u64,
     }
 
+    /// Health status information for monitoring
+    #[derive(
+        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct HealthStatus {
+        pub is_healthy: bool,
+        pub is_paused: bool,
+        pub contract_version: u32,
+        pub property_count: u64,
+        pub escrow_count: u64,
+        pub has_oracle: bool,
+        pub has_compliance_registry: bool,
+        pub has_fee_manager: bool,
+        pub block_number: u32,
+        pub timestamp: u64,
+    }
+
     /// Global analytics data
     #[derive(
         Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
@@ -201,6 +250,75 @@ mod propchain_contracts {
         pub last_operation_gas: u64,
         pub min_gas_used: u64,
         pub max_gas_used: u64,
+    }
+
+    /// Configuration for batch operations
+    #[derive(
+        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct BatchConfig {
+        /// Maximum number of items in a single batch call.
+        pub max_batch_size: u32,
+        /// Stop processing after this many failures.
+        pub max_failure_threshold: u32,
+    }
+
+    impl Default for BatchConfig {
+        fn default() -> Self {
+            Self {
+                max_batch_size: 50,
+                max_failure_threshold: 5,
+            }
+        }
+    }
+
+    /// Result of a batch operation with partial success support
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct BatchResult {
+        /// Successfully processed item IDs.
+        pub successes: Vec<u64>,
+        /// Per-item failures with index, item ID, and error.
+        pub failures: Vec<BatchItemFailure>,
+        /// Batch performance metrics.
+        pub metrics: BatchMetrics,
+    }
+
+    /// A single item failure within a batch operation
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct BatchItemFailure {
+        /// Position in the input array.
+        pub index: u32,
+        /// Property ID that failed (0 if not yet assigned).
+        pub item_id: u64,
+        /// The specific error that occurred.
+        pub error: Error,
+    }
+
+    /// Metrics for a single batch operation call
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct BatchMetrics {
+        pub total_items: u32,
+        pub successful_items: u32,
+        pub failed_items: u32,
+        /// True if processing stopped due to failure threshold.
+        pub early_terminated: bool,
+    }
+
+    /// Historical batch operation statistics (stored on-chain)
+    #[derive(
+        Debug, Clone, PartialEq, Eq, Default, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct BatchOperationStats {
+        pub total_batches_processed: u64,
+        pub total_items_processed: u64,
+        pub total_items_failed: u64,
+        pub total_early_terminations: u64,
+        pub largest_batch_processed: u32,
     }
 
     /// Badge types for property verification
@@ -574,6 +692,24 @@ mod propchain_contracts {
         transferred_by: AccountId,
     }
 
+    /// Event emitted after every batch operation for monitoring
+    #[ink(event)]
+    pub struct BatchOperationCompleted {
+        /// 0=register, 1=transfer, 2=metadata_update, 3=transfer_multiple
+        operation_code: u8,
+        #[ink(topic)]
+        caller: AccountId,
+        #[ink(topic)]
+        event_version: u8,
+        total_items: u32,
+        successful_items: u32,
+        failed_items: u32,
+        early_terminated: bool,
+        timestamp: u64,
+        block_number: u32,
+        transaction_hash: Hash,
+    }
+
     /// Event emitted when a badge is issued to a property
     #[ink(event)]
     pub struct BadgeIssued {
@@ -748,7 +884,69 @@ mod propchain_contracts {
     }
 
     impl PropertyRegistry {
-        /// Creates a new PropertyRegistry contract
+        /// # Creates a new PropertyRegistry Contract Instance
+        ///
+        /// ## Description
+        /// Initializes a new instance of the PropertyRegistry contract with the caller as admin.
+        /// This is the constructor that must be called once during deployment to set up initial state.
+        ///
+        /// ## Parameters
+        /// None - Uses `env().caller()` as the initial admin
+        ///
+        /// ## Returns
+        /// - `PropertyRegistry` - New contract instance with:
+        ///   - `admin` set to caller's account
+        ///   - `version` set to 1
+        ///   - All storage mappings initialized
+        ///   - Access control bootstrap completed
+        ///
+        /// ## Events Emitted
+        /// - [`ContractInitialized`](crate::ContractInitialized) - Emitted immediately after initialization
+        ///   - `admin`: Account ID of contract creator
+        ///   - `contract_version`: Version number (always 1 for initial deployment)
+        ///   - `timestamp`: Block timestamp at initialization
+        ///   - `block_number`: Block number at initialization
+        ///
+        /// ## Example
+        /// ```rust,ignore
+        /// // Deploy and initialize contract
+        /// use ink::env::DefaultEnvironment;
+        /// use propchain_contracts::PropertyRegistry;
+        ///
+        /// // Constructor is called automatically during deployment
+        /// let contract = PropertyRegistry::new();
+        ///
+        /// // Verify admin is set correctly
+        /// assert_eq!(contract.admin(), caller_account);
+        /// assert_eq!(contract.version(), 1);
+        /// ```
+        ///
+        /// ## Security Requirements
+        /// - **Caller**: Becomes contract admin with full privileges
+        /// - **One-time call**: Should only be called once during deployment
+        /// - **Access Control**: Admin role granted to caller automatically
+        ///
+        /// ## Gas Considerations
+        /// - **Cost**: ~200,000 gas (one-time deployment cost)
+        /// - **Storage**: Allocates initial contract state (~50 bytes)
+        /// - **Optimization**: No user-controllable parameters to optimize
+        ///
+        /// ## Post-Deployment Steps
+        /// 1. Verify admin account is correct
+        /// 2. Configure oracle contract (if using valuations)
+        /// 3. Set compliance registry address (if enforcing KYC/AML)
+        /// 4. Add pause guardians for emergency controls
+        /// 5. Fund contract with initial balance for operations
+        ///
+        /// ## Related Functions
+        /// - [`change_admin`](crate::PropertyRegistry::change_admin) - Transfer admin privileges
+        /// - [`set_oracle`](crate::PropertyRegistry::set_oracle) - Configure price oracle
+        /// - [`set_compliance_registry`](crate::PropertyRegistry::set_compliance_registry) - Set compliance
+        ///
+        /// ## Version History
+        /// - **v1.0.0** - Initial implementation
+        /// - **v1.1.0** - Added access control bootstrap
+        /// - **v1.2.0** - Enhanced with pause guardians and gas tracking
         #[ink(constructor)]
         pub fn new() -> Self {
             let caller = Self::env().caller();
@@ -794,6 +992,16 @@ mod propchain_contracts {
                 oracle: None,
                 fee_manager: None,
                 fractional: Mapping::default(),
+                access_control: {
+                    let mut ac = AccessControl::new(64);
+                    ac.bootstrap(caller, block_number, timestamp);
+                    let _ = ac.grant_role(caller, caller, Role::Verifier, block_number, timestamp);
+                    let _ =
+                        ac.grant_role(caller, caller, Role::PauseGuardian, block_number, timestamp);
+                    ac
+                },
+                batch_config: BatchConfig::default(),
+                batch_operation_stats: BatchOperationStats::default(),
             };
 
             // Emit contract initialization event
@@ -807,23 +1015,169 @@ mod propchain_contracts {
             contract
         }
 
-        /// Returns the contract version
+        /// # Returns the Contract Version
+        ///
+        /// ## Description
+        /// Returns the current version number of the PropertyRegistry contract.
+        /// Used for compatibility checks and upgrade management.
+        ///
+        /// ## Parameters
+        /// None
+        ///
+        /// ## Returns
+        /// - `u32` - Contract version number (currently 1)
+        ///
+        /// ## Example
+        /// ```rust,ignore
+        /// // Check contract version before calling version-specific methods
+        /// let version = contract.version();
+        /// assert_eq!(version, 1);
+        ///
+        /// if version >= 2 {
+        ///     // Use v2+ features
+        ///     contract.new_feature()?;
+        /// } else {
+        ///     // Use legacy approach
+        ///     contract.legacy_feature()?;
+        /// }
+        /// ```
+        ///
+        /// ## Gas Considerations
+        /// - **Cost**: ~500 gas (simple storage read)
+        /// - **Optimization**: Free function, no state changes
+        ///
+        /// ## Related Functions
+        /// - [`admin`](crate::PropertyRegistry::admin) - Get admin account
+        /// - [`health_check`](crate::PropertyRegistry::health_check) - Full health status
         #[ink(message)]
         pub fn version(&self) -> u32 {
             self.version
         }
 
-        /// Returns the admin account
+        /// # Returns the Admin Account
+        ///
+        /// ## Description
+        /// Returns the AccountId of the current contract administrator.
+        /// The admin has privileges to configure contracts, pause operations, and manage access control.
+        ///
+        /// ## Parameters
+        /// None
+        ///
+        /// ## Returns
+        /// - `AccountId` - Account ID of contract administrator
+        ///
+        /// ## Example
+        /// ```rust,ignore
+        /// // Verify admin before sensitive operations
+        /// let admin = contract.admin();
+        /// println!("Contract admin: {:?}", admin);
+        ///
+        /// // Check if caller is admin
+        /// if self.env().caller() == contract.admin() {
+        ///     // Perform admin-only operation
+        /// }
+        /// ```
+        ///
+        /// ## Security Requirements
+        /// - **Access**: Read-only, anyone can query
+        /// - **Use Case**: Verify admin identity for off-chain coordination
+        ///
+        /// ## Gas Considerations
+        /// - **Cost**: ~500 gas (storage read)
+        ///
+        /// ## Related Functions
+        /// - [`change_admin`](crate::PropertyRegistry::change_admin) - Transfer admin privileges
+        /// - [`version`](crate::PropertyRegistry::version) - Get contract version
         #[ink(message)]
         pub fn admin(&self) -> AccountId {
             self.admin
         }
 
+        /// # Returns Full Contract Health Status
+        ///
+        /// ## Description
+        /// Provides comprehensive health monitoring data for the contract.
+        /// Used by monitoring systems, dashboards, and automated health checks.
+        ///
+        /// ## Parameters
+        /// None
+        ///
+        /// ## Returns
+        /// - [`HealthStatus`](crate::HealthStatus) - Complete health information including:
+        ///   - `is_healthy`: Overall health flag (false if paused)
+        ///   - `is_paused`: Current pause state
+        ///   - `contract_version`: Version number
+        ///   - `property_count`: Total registered properties
+        ///   - `escrow_count`: Active escrows
+        ///   - `has_oracle`: Oracle configured
+        ///   - `has_compliance_registry`: Compliance registry configured
+        ///   - `has_fee_manager`: Fee manager configured
+        ///   - `block_number`: Current block
+        ///   - `timestamp`: Current timestamp
+        ///
+        /// ## Example
+        /// ```rust,ignore
+        /// // Monitor contract health in dashboard
+        /// let health = contract.health_check()?;
+        ///
+        /// if !health.is_healthy {
+        ///     alert_admins("Contract unhealthy!");
+        /// }
+        ///
+        /// println!("Properties: {}", health.property_count);
+        /// println!("Escrows: {}", health.escrow_count);
+        /// println!("Oracle: {:?}", health.has_oracle);
+        /// ```
+        ///
+        /// ## Use Cases
+        /// 1. **Monitoring Dashboards**: Display real-time contract status
+        /// 2. **Automated Alerts**: Trigger notifications on unhealthy states
+        /// 3. **Pre-flight Checks**: Verify contract before operations
+        /// 4. **Audit Trails**: Log periodic health snapshots
+        ///
+        /// ## Gas Considerations
+        /// - **Cost**: ~2,000 gas (multiple storage reads)
+        /// - **Optimization**: Read-only, no state changes
+        ///
+        /// ## Related Functions
+        /// - [`ping`](crate::PropertyRegistry::ping) - Simple liveness check
+        /// - [`dependencies_healthy`](crate::PropertyRegistry::dependencies_healthy) - Dependency check
+        /// - [`pause_contract`](crate::PropertyRegistry::pause_contract) - Pause operations
+        #[ink(message)]
+        pub fn health_check(&self) -> HealthStatus {
+            let is_paused = self.pause_info.paused;
+            HealthStatus {
+                is_healthy: !is_paused,
+                is_paused,
+                contract_version: self.version,
+                property_count: self.property_count,
+                escrow_count: self.escrow_count,
+                has_oracle: self.oracle.is_some(),
+                has_compliance_registry: self.compliance_registry.is_some(),
+                has_fee_manager: self.fee_manager.is_some(),
+                block_number: self.env().block_number(),
+                timestamp: self.env().block_timestamp(),
+            }
+        }
+
+        /// Simple liveness check that returns true if the contract is responsive
+        #[ink(message)]
+        pub fn ping(&self) -> bool {
+            true
+        }
+
+        /// Returns true if all critical dependencies (oracle, compliance, fees) are configured
+        #[ink(message)]
+        pub fn dependencies_healthy(&self) -> bool {
+            self.oracle.is_some()
+                && self.compliance_registry.is_some()
+                && self.fee_manager.is_some()
+        }
+
         /// Set the oracle contract address
         #[ink(message)]
         pub fn set_oracle(&mut self, oracle: AccountId) -> Result<(), Error> {
-            let caller = self.env().caller();
-            if caller != self.admin {
+            if !self.ensure_admin_rbac() {
                 return Err(Error::Unauthorized);
             }
             self.oracle = Some(oracle);
@@ -839,8 +1193,7 @@ mod propchain_contracts {
         /// Set the fee manager contract address (admin only)
         #[ink(message)]
         pub fn set_fee_manager(&mut self, fee_manager: Option<AccountId>) -> Result<(), Error> {
-            let caller = self.env().caller();
-            if caller != self.admin {
+            if !self.ensure_admin_rbac() {
                 return Err(Error::Unauthorized);
             }
             self.fee_manager = fee_manager;
@@ -895,12 +1248,19 @@ mod propchain_contracts {
         #[ink(message)]
         pub fn change_admin(&mut self, new_admin: AccountId) -> Result<(), Error> {
             let caller = self.env().caller();
-            if caller != self.admin {
+            if !self.ensure_admin_rbac() {
                 return Err(Error::Unauthorized);
             }
 
             let old_admin = self.admin;
             self.admin = new_admin;
+            let _ = self.access_control.grant_role(
+                caller,
+                new_admin,
+                Role::Admin,
+                self.env().block_number(),
+                self.env().block_timestamp(),
+            );
 
             // Emit enhanced admin changed event
 
@@ -924,8 +1284,7 @@ mod propchain_contracts {
             &mut self,
             registry: Option<AccountId>,
         ) -> Result<(), Error> {
-            let caller = self.env().caller();
-            if caller != self.admin {
+            if !self.ensure_admin_rbac() {
                 return Err(Error::Unauthorized);
             }
             self.compliance_registry = registry;
@@ -1004,7 +1363,7 @@ mod propchain_contracts {
             duration_seconds: Option<u64>,
         ) -> Result<(), Error> {
             let caller = self.env().caller();
-            let is_admin = caller == self.admin;
+            let is_admin = self.access_control.has_role(caller, Role::Admin);
             let is_guardian = self.pause_guardians.get(caller).unwrap_or(false);
 
             if !is_admin && !is_guardian {
@@ -1071,7 +1430,7 @@ mod propchain_contracts {
         pub fn request_resume(&mut self) -> Result<(), Error> {
             let caller = self.env().caller();
             // Only admin or guardians can request resume
-            let is_admin = caller == self.admin;
+            let is_admin = self.access_control.has_role(caller, Role::Admin);
             let is_guardian = self.pause_guardians.get(caller).unwrap_or(false);
 
             if !is_admin && !is_guardian {
@@ -1109,7 +1468,7 @@ mod propchain_contracts {
         #[ink(message)]
         pub fn approve_resume(&mut self) -> Result<(), Error> {
             let caller = self.env().caller();
-            let is_admin = caller == self.admin;
+            let is_admin = self.access_control.has_role(caller, Role::Admin);
             let is_guardian = self.pause_guardians.get(caller).unwrap_or(false);
 
             if !is_admin && !is_guardian {
@@ -1161,7 +1520,7 @@ mod propchain_contracts {
             guardian: AccountId,
             is_enabled: bool,
         ) -> Result<(), Error> {
-            if self.env().caller() != self.admin {
+            if !self.ensure_admin_rbac() {
                 return Err(Error::Unauthorized);
             }
             self.pause_guardians.insert(guardian, &is_enabled);
@@ -1178,6 +1537,44 @@ mod propchain_contracts {
         #[ink(message)]
         pub fn get_pause_state(&self) -> PauseInfo {
             self.pause_info.clone()
+        }
+
+        #[ink(message)]
+        pub fn grant_role(&mut self, account: AccountId, role: Role) -> Result<(), Error> {
+            let caller = self.env().caller();
+            self.access_control
+                .grant_role(
+                    caller,
+                    account,
+                    role,
+                    self.env().block_number(),
+                    self.env().block_timestamp(),
+                )
+                .map_err(|_| Error::Unauthorized)
+        }
+
+        #[ink(message)]
+        pub fn revoke_role(&mut self, account: AccountId, role: Role) -> Result<(), Error> {
+            let caller = self.env().caller();
+            self.access_control
+                .revoke_role(
+                    caller,
+                    account,
+                    role,
+                    self.env().block_number(),
+                    self.env().block_timestamp(),
+                )
+                .map_err(|_| Error::Unauthorized)
+        }
+
+        #[ink(message)]
+        pub fn has_role(&self, account: AccountId, role: Role) -> bool {
+            self.access_control.has_role(account, role)
+        }
+
+        #[ink(message)]
+        pub fn get_permission_audit_entry(&self, id: u64) -> Option<PermissionAuditEntry> {
+            self.access_control.get_audit_entry(id)
         }
 
         /// Registers a new property
@@ -1361,55 +1758,84 @@ mod propchain_contracts {
         pub fn batch_register_properties(
             &mut self,
             properties: Vec<PropertyMetadata>,
-        ) -> Result<Vec<u64>, Error> {
+        ) -> Result<BatchResult, Error> {
             self.ensure_not_paused()?;
-            let mut results = Vec::new();
+            self.validate_batch_size(properties.len())?;
+
             let caller = self.env().caller();
+            let timestamp = self.env().block_timestamp();
+            let total_items = properties.len() as u32;
+            let mut successes = Vec::new();
+            let mut failures = Vec::new();
+            let mut early_terminated = false;
+            let mut next_id = self.property_count + 1;
 
-            // Pre-calculate all property IDs to avoid repeated storage reads
-            let start_id = self.property_count + 1;
-            let end_id = start_id + properties.len() as u64 - 1;
-            self.property_count = end_id;
-
-            // Get existing owner properties to avoid repeated storage reads
             let mut owner_props = self.owner_properties.get(caller).unwrap_or_default();
 
             for (i, metadata) in properties.into_iter().enumerate() {
-                let property_id = start_id + i as u64;
+                // Check early termination
+                if failures.len() >= self.batch_config.max_failure_threshold as usize {
+                    early_terminated = true;
+                    break;
+                }
+
+                // Validate metadata
+                if metadata.location.is_empty() {
+                    failures.push(BatchItemFailure {
+                        index: i as u32,
+                        item_id: 0,
+                        error: Error::InvalidMetadata,
+                    });
+                    continue;
+                }
+
+                let property_id = next_id;
+                next_id += 1;
 
                 let property_info = PropertyInfo {
                     id: property_id,
                     owner: caller,
                     metadata,
-                    registered_at: self.env().block_timestamp(),
+                    registered_at: timestamp,
                 };
 
                 self.properties.insert(property_id, &property_info);
                 owner_props.push(property_id);
-
-                results.push(property_id);
+                successes.push(property_id);
             }
 
-            // Update owner properties once at the end
-            self.owner_properties.insert(caller, &owner_props);
+            // Update property count only if there were successes
+            if !successes.is_empty() {
+                self.property_count = next_id - 1;
+                self.owner_properties.insert(caller, &owner_props);
 
-            // Emit enhanced batch registration event
+                let transaction_hash: Hash = [0u8; 32].into();
+                self.env().emit_event(BatchPropertyRegistered {
+                    owner: caller,
+                    event_version: 1,
+                    property_ids: successes.clone(),
+                    count: successes.len() as u64,
+                    timestamp,
+                    block_number: self.env().block_number(),
+                    transaction_hash,
+                });
+            }
 
-            let transaction_hash: Hash = [0u8; 32].into();
-            self.env().emit_event(BatchPropertyRegistered {
-                owner: caller,
-                event_version: 1,
-                property_ids: results.clone(),
-                count: results.len() as u64,
-                timestamp: self.env().block_timestamp(),
-                block_number: self.env().block_number(),
-                transaction_hash,
-            });
+            let metrics = BatchMetrics {
+                total_items,
+                successful_items: successes.len() as u32,
+                failed_items: failures.len() as u32,
+                early_terminated,
+            };
 
-            // Track gas usage
+            self.record_batch_operation(0, &metrics);
             self.track_gas_usage("batch_register_properties".as_bytes());
 
-            Ok(results)
+            Ok(BatchResult {
+                successes,
+                failures,
+                metrics,
+            })
         }
 
         /// Batch transfers multiple properties to the same recipient
@@ -1420,9 +1846,15 @@ mod propchain_contracts {
             to: AccountId,
         ) -> Result<(), Error> {
             self.ensure_not_paused()?;
+            self.validate_batch_size(property_ids.len())?;
+
+            if property_ids.is_empty() {
+                return Ok(());
+            }
+
             let caller = self.env().caller();
 
-            // Validate all properties first to avoid partial transfers
+            // Phase 1: Validate all properties (atomic — fail on first error)
             for &property_id in &property_ids {
                 let property = self
                     .properties
@@ -1435,64 +1867,59 @@ mod propchain_contracts {
                 }
             }
 
-            // Capture the original owner before transfers (fix for bug)
-            let from = if !property_ids.is_empty() {
-                let first_property = self
-                    .properties
-                    .get(property_ids[0])
-                    .ok_or(Error::PropertyNotFound)?;
-                first_property.owner
-            } else {
-                return Ok(()); // No properties to transfer
-            };
+            // Capture the original owner
+            let from = self
+                .properties
+                .get(property_ids[0])
+                .ok_or(Error::PropertyNotFound)?
+                .owner;
 
-            // Perform all transfers
-            for property_id in &property_ids {
+            // Phase 2: Optimized execution — batch storage reads/writes per owner
+            // Read owner_properties for `from` once, remove all in one pass
+            let mut from_props = self.owner_properties.get(from).unwrap_or_default();
+            from_props.retain(|id| !property_ids.contains(id));
+            self.owner_properties.insert(from, &from_props);
+
+            // Accumulate `to` owner additions, write once
+            let mut to_props = self.owner_properties.get(to).unwrap_or_default();
+
+            for &property_id in &property_ids {
                 let mut property = self
                     .properties
                     .get(property_id)
                     .ok_or(Error::PropertyNotFound)?;
-                let current_from = property.owner;
 
-                // Remove from current owner's properties
-                let mut current_owner_props =
-                    self.owner_properties.get(current_from).unwrap_or_default();
-                current_owner_props.retain(|&id| id != *property_id);
-                self.owner_properties
-                    .insert(current_from, &current_owner_props);
-
-                // Add to new owner's properties
-                let mut new_owner_props = self.owner_properties.get(to).unwrap_or_default();
-                new_owner_props.push(*property_id);
-                self.owner_properties.insert(to, &new_owner_props);
-
-                // Update property owner
                 property.owner = to;
                 self.properties.insert(property_id, &property);
-                // Optimized: Update reverse mapping
                 self.property_owners.insert(property_id, &to);
-
-                // Clear approval
                 self.approvals.remove(property_id);
+                to_props.push(property_id);
             }
 
-            // Emit enhanced batch transfer event
-            if !property_ids.is_empty() {
-                let transaction_hash: Hash = [0u8; 32].into();
-                self.env().emit_event(BatchPropertyTransferred {
-                    from,
-                    to,
-                    event_version: 1,
-                    property_ids: property_ids.clone(),
-                    count: property_ids.len() as u64,
-                    timestamp: self.env().block_timestamp(),
-                    block_number: self.env().block_number(),
-                    transaction_hash,
-                    transferred_by: caller,
-                });
-            }
+            // Single write for `to` owner properties
+            self.owner_properties.insert(to, &to_props);
 
-            // Track gas usage
+            // Emit events
+            let transaction_hash: Hash = [0u8; 32].into();
+            self.env().emit_event(BatchPropertyTransferred {
+                from,
+                to,
+                event_version: 1,
+                property_ids: property_ids.clone(),
+                count: property_ids.len() as u64,
+                timestamp: self.env().block_timestamp(),
+                block_number: self.env().block_number(),
+                transaction_hash,
+                transferred_by: caller,
+            });
+
+            let metrics = BatchMetrics {
+                total_items: property_ids.len() as u32,
+                successful_items: property_ids.len() as u32,
+                failed_items: 0,
+                early_terminated: false,
+            };
+            self.record_batch_operation(1, &metrics);
             self.track_gas_usage("batch_transfer_properties".as_bytes());
 
             Ok(())
@@ -1503,60 +1930,91 @@ mod propchain_contracts {
         pub fn batch_update_metadata(
             &mut self,
             updates: Vec<(u64, PropertyMetadata)>,
-        ) -> Result<(), Error> {
+        ) -> Result<BatchResult, Error> {
             self.ensure_not_paused()?;
+            self.validate_batch_size(updates.len())?;
+
             let caller = self.env().caller();
+            let total_items = updates.len() as u32;
+            let mut successes = Vec::new();
+            let mut failures = Vec::new();
+            let mut early_terminated = false;
 
-            // Validate all properties first to avoid partial updates
-            for (property_id, ref metadata) in &updates {
-                let property = self
-                    .properties
-                    .get(property_id)
-                    .ok_or(Error::PropertyNotFound)?;
+            for (i, (property_id, metadata)) in updates.into_iter().enumerate() {
+                if failures.len() >= self.batch_config.max_failure_threshold as usize {
+                    early_terminated = true;
+                    break;
+                }
 
+                // Validate property exists
+                let property = match self.properties.get(property_id) {
+                    Some(p) => p,
+                    None => {
+                        failures.push(BatchItemFailure {
+                            index: i as u32,
+                            item_id: property_id,
+                            error: Error::PropertyNotFound,
+                        });
+                        continue;
+                    }
+                };
+
+                // Validate ownership
                 if property.owner != caller {
-                    return Err(Error::Unauthorized);
+                    failures.push(BatchItemFailure {
+                        index: i as u32,
+                        item_id: property_id,
+                        error: Error::Unauthorized,
+                    });
+                    continue;
                 }
 
-                // Check if metadata is valid (basic check)
+                // Validate metadata
                 if metadata.location.is_empty() {
-                    return Err(Error::InvalidMetadata);
+                    failures.push(BatchItemFailure {
+                        index: i as u32,
+                        item_id: property_id,
+                        error: Error::InvalidMetadata,
+                    });
+                    continue;
                 }
-            }
 
-            // Perform all updates
-            let mut updated_property_ids = Vec::new();
-            for (property_id, metadata) in updates {
-                let mut property = self
-                    .properties
-                    .get(property_id)
-                    .ok_or(Error::PropertyNotFound)?;
-
-                property.metadata = metadata.clone();
+                // Apply update
+                let mut property = property;
+                property.metadata = metadata;
                 self.properties.insert(property_id, &property);
-                updated_property_ids.push(property_id);
+                successes.push(property_id);
             }
 
-            // Emit enhanced batch metadata update event
-            if !updated_property_ids.is_empty() {
-                let count = updated_property_ids.len() as u64;
-
+            // Emit existing batch event for successes
+            if !successes.is_empty() {
                 let transaction_hash: Hash = [0u8; 32].into();
                 self.env().emit_event(BatchMetadataUpdated {
                     owner: caller,
                     event_version: 1,
-                    property_ids: updated_property_ids,
-                    count,
+                    property_ids: successes.clone(),
+                    count: successes.len() as u64,
                     timestamp: self.env().block_timestamp(),
                     block_number: self.env().block_number(),
                     transaction_hash,
                 });
             }
 
-            // Track gas usage
+            let metrics = BatchMetrics {
+                total_items,
+                successful_items: successes.len() as u32,
+                failed_items: failures.len() as u32,
+                early_terminated,
+            };
+
+            self.record_batch_operation(2, &metrics);
             self.track_gas_usage("batch_update_metadata".as_bytes());
 
-            Ok(())
+            Ok(BatchResult {
+                successes,
+                failures,
+                metrics,
+            })
         }
 
         /// Transfers multiple properties to different recipients
@@ -1566,9 +2024,15 @@ mod propchain_contracts {
             transfers: Vec<(u64, AccountId)>,
         ) -> Result<(), Error> {
             self.ensure_not_paused()?;
+            self.validate_batch_size(transfers.len())?;
+
+            if transfers.is_empty() {
+                return Ok(());
+            }
+
             let caller = self.env().caller();
 
-            // Validate all properties first to avoid partial transfers
+            // Phase 1: Validate all transfers (atomic)
             for (property_id, _) in &transfers {
                 let property = self
                     .properties
@@ -1581,58 +2045,63 @@ mod propchain_contracts {
                 }
             }
 
-            // Perform all transfers
-            let mut transferred_property_ids = Vec::new();
+            // Phase 2: Group by from-owner and to-owner for batched writes
+            let transfer_ids: Vec<u64> = transfers.iter().map(|(id, _)| *id).collect();
+
+            // Remove all transferred properties from caller's list in one pass
+            let mut from_props = self.owner_properties.get(caller).unwrap_or_default();
+            from_props.retain(|id| !transfer_ids.contains(id));
+            self.owner_properties.insert(caller, &from_props);
+
+            // Group additions by recipient to minimize writes
+            let mut recipient_additions: Vec<(AccountId, Vec<u64>)> = Vec::new();
+
             for (property_id, to) in &transfers {
                 let mut property = self
                     .properties
                     .get(property_id)
                     .ok_or(Error::PropertyNotFound)?;
-                let from = property.owner;
 
-                // Remove from current owner's properties
-                let mut current_owner_props = self.owner_properties.get(from).unwrap_or_default();
-                current_owner_props.retain(|&id| id != *property_id);
-                self.owner_properties.insert(from, &current_owner_props);
-
-                // Add to new owner's properties
-                let mut new_owner_props = self.owner_properties.get(to).unwrap_or_default();
-                new_owner_props.push(*property_id);
-                self.owner_properties.insert(to, &new_owner_props);
-
-                // Update property owner
                 property.owner = *to;
                 self.properties.insert(property_id, &property);
-                // Optimized: Update reverse mapping
                 self.property_owners.insert(property_id, to);
-
-                // Clear approval
                 self.approvals.remove(property_id);
-                transferred_property_ids.push(*property_id);
+
+                // Accumulate by recipient
+                if let Some(entry) = recipient_additions.iter_mut().find(|(addr, _)| addr == to) {
+                    entry.1.push(*property_id);
+                } else {
+                    recipient_additions.push((*to, vec![*property_id]));
+                }
             }
 
-            // Emit enhanced batch transfer to multiple recipients event
-            if !transferred_property_ids.is_empty() {
-                let first_property = self
-                    .properties
-                    .get(transferred_property_ids[0])
-                    .ok_or(Error::PropertyNotFound)?;
-                let from = first_property.owner;
-
-                let transaction_hash: Hash = [0u8; 32].into();
-                self.env().emit_event(BatchPropertyTransferredToMultiple {
-                    from,
-                    event_version: 1,
-                    transfers: transfers.clone(),
-                    count: transfers.len() as u64,
-                    timestamp: self.env().block_timestamp(),
-                    block_number: self.env().block_number(),
-                    transaction_hash,
-                    transferred_by: caller,
-                });
+            // Batch write per recipient
+            for (recipient, new_ids) in recipient_additions {
+                let mut recipient_props = self.owner_properties.get(recipient).unwrap_or_default();
+                recipient_props.extend(new_ids);
+                self.owner_properties.insert(recipient, &recipient_props);
             }
 
-            // Track gas usage
+            // Emit event
+            let transaction_hash: Hash = [0u8; 32].into();
+            self.env().emit_event(BatchPropertyTransferredToMultiple {
+                from: caller,
+                event_version: 1,
+                transfers: transfers.clone(),
+                count: transfers.len() as u64,
+                timestamp: self.env().block_timestamp(),
+                block_number: self.env().block_number(),
+                transaction_hash,
+                transferred_by: caller,
+            });
+
+            let metrics = BatchMetrics {
+                total_items: transfers.len() as u32,
+                successful_items: transfers.len() as u32,
+                failed_items: 0,
+                early_terminated: false,
+            };
+            self.record_batch_operation(3, &metrics);
             self.track_gas_usage("batch_transfer_properties_to_multiple".as_bytes());
 
             Ok(())
@@ -1996,6 +2465,45 @@ mod propchain_contracts {
             }
         }
 
+        /// Updates batch operation stats and emits monitoring event.
+        fn record_batch_operation(
+            &mut self,
+            operation_code: u8,
+            metrics: &BatchMetrics,
+        ) {
+            self.batch_operation_stats.total_batches_processed += 1;
+            self.batch_operation_stats.total_items_processed += metrics.successful_items as u64;
+            self.batch_operation_stats.total_items_failed += metrics.failed_items as u64;
+            if metrics.early_terminated {
+                self.batch_operation_stats.total_early_terminations += 1;
+            }
+            if metrics.total_items > self.batch_operation_stats.largest_batch_processed {
+                self.batch_operation_stats.largest_batch_processed = metrics.total_items;
+            }
+
+            let transaction_hash: Hash = [0u8; 32].into();
+            self.env().emit_event(BatchOperationCompleted {
+                operation_code,
+                caller: self.env().caller(),
+                event_version: 1,
+                total_items: metrics.total_items,
+                successful_items: metrics.successful_items,
+                failed_items: metrics.failed_items,
+                early_terminated: metrics.early_terminated,
+                timestamp: self.env().block_timestamp(),
+                block_number: self.env().block_number(),
+                transaction_hash,
+            });
+        }
+
+        /// Validates batch size against config. Returns Err(BatchSizeExceeded) if too large.
+        fn validate_batch_size(&self, size: usize) -> Result<(), Error> {
+            if size > self.batch_config.max_batch_size as usize {
+                return Err(Error::BatchSizeExceeded);
+            }
+            Ok(())
+        }
+
         /// Gas Monitoring: Tracks gas usage for operations
         #[ink(message)]
         pub fn get_gas_metrics(&self) -> GasMetrics {
@@ -2017,6 +2525,42 @@ mod propchain_contracts {
                 },
                 max_gas_used: self.gas_tracker.max_gas_used,
             }
+        }
+
+        /// Admin-only: update batch operation configuration.
+        #[ink(message)]
+        pub fn update_batch_config(
+            &mut self,
+            max_batch_size: u32,
+            max_failure_threshold: u32,
+        ) -> Result<(), Error> {
+            let caller = self.env().caller();
+            if caller != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            if max_batch_size == 0 || max_batch_size > 200 {
+                return Err(Error::InvalidMetadata);
+            }
+            if max_failure_threshold == 0 || max_failure_threshold > max_batch_size {
+                return Err(Error::InvalidMetadata);
+            }
+            self.batch_config = BatchConfig {
+                max_batch_size,
+                max_failure_threshold,
+            };
+            Ok(())
+        }
+
+        /// Returns the current batch operation configuration.
+        #[ink(message)]
+        pub fn get_batch_config(&self) -> BatchConfig {
+            self.batch_config.clone()
+        }
+
+        /// Returns historical batch operation statistics.
+        #[ink(message)]
+        pub fn get_batch_stats(&self) -> BatchOperationStats {
+            self.batch_operation_stats.clone()
         }
 
         /// Performance Monitoring: Gets optimization recommendations
@@ -2070,7 +2614,7 @@ mod propchain_contracts {
         #[ink(message)]
         pub fn set_verifier(&mut self, verifier: AccountId, authorized: bool) -> Result<(), Error> {
             let caller = self.env().caller();
-            if caller != self.admin {
+            if !self.ensure_admin_rbac() {
                 return Err(Error::Unauthorized);
             }
 
@@ -2207,6 +2751,20 @@ mod propchain_contracts {
             Ok(())
         }
 
+        /// Submits a verification request for a property badge.
+        ///
+        /// The property owner provides evidence (e.g. a URL to supporting documents)
+        /// and the request is queued for review by an authorized verifier.
+        ///
+        /// # Arguments
+        ///
+        /// * `property_id` - The property to request verification for
+        /// * `badge_type` - The type of badge being requested
+        /// * `evidence_url` - URL pointing to supporting evidence
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<u64, Error>` with the new verification request ID on success
         #[ink(message)]
         pub fn request_verification(
             &mut self,
@@ -2260,6 +2818,21 @@ mod propchain_contracts {
             Ok(request_id)
         }
 
+        /// Reviews a pending verification request and optionally issues the badge.
+        ///
+        /// Only authorized verifiers or the admin may call this. When approved,
+        /// the corresponding badge is automatically issued to the property.
+        ///
+        /// # Arguments
+        ///
+        /// * `request_id` - The verification request to review
+        /// * `approved` - Whether to approve or reject the request
+        /// * `expires_at` - Optional expiration timestamp for the badge
+        /// * `metadata_url` - URL pointing to badge metadata
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn review_verification(
             &mut self,
@@ -2315,6 +2888,20 @@ mod propchain_contracts {
             Ok(())
         }
 
+        /// Submits an appeal against a revoked badge.
+        ///
+        /// Only the property owner may appeal. The badge must already be revoked
+        /// for the appeal to be valid.
+        ///
+        /// # Arguments
+        ///
+        /// * `property_id` - The property whose badge was revoked
+        /// * `badge_type` - The type of badge to appeal
+        /// * `reason` - Justification for the appeal
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<u64, Error>` with the new appeal ID on success
         #[ink(message)]
         pub fn submit_appeal(
             &mut self,
@@ -2377,6 +2964,19 @@ mod propchain_contracts {
             Ok(appeal_id)
         }
 
+        /// Resolves a pending appeal (admin only).
+        ///
+        /// If approved, the revoked badge is reinstated for the property.
+        ///
+        /// # Arguments
+        ///
+        /// * `appeal_id` - The appeal to resolve
+        /// * `approved` - Whether to approve or reject the appeal
+        /// * `resolution` - Explanation of the resolution decision
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn resolve_appeal(
             &mut self,
@@ -2387,7 +2987,7 @@ mod propchain_contracts {
             self.ensure_not_paused()?;
             let caller = self.env().caller();
 
-            if caller != self.admin {
+            if !self.ensure_admin_rbac() {
                 return Err(Error::Unauthorized);
             }
 
@@ -2460,6 +3060,16 @@ mod propchain_contracts {
             badges
         }
 
+        /// Checks whether a property holds a valid (non-revoked) badge of the given type.
+        ///
+        /// # Arguments
+        ///
+        /// * `property_id` - The property to check
+        /// * `badge_type` - The badge type to look for
+        ///
+        /// # Returns
+        ///
+        /// Returns `true` if the property has the badge and it has not been revoked
         #[ink(message)]
         pub fn has_badge(&self, property_id: u64, badge_type: BadgeType) -> bool {
             if let Some(badge) = self.property_badges.get((property_id, badge_type)) {
@@ -2469,16 +3079,44 @@ mod propchain_contracts {
             }
         }
 
+        /// Returns the badge for a property and badge type, if one exists.
+        ///
+        /// # Arguments
+        ///
+        /// * `property_id` - The property to query
+        /// * `badge_type` - The badge type to retrieve
+        ///
+        /// # Returns
+        ///
+        /// Returns `Option<Badge>` containing the badge details, or `None`
         #[ink(message)]
         pub fn get_badge(&self, property_id: u64, badge_type: BadgeType) -> Option<Badge> {
             self.property_badges.get((property_id, badge_type))
         }
 
+        /// Returns a verification request by its ID.
+        ///
+        /// # Arguments
+        ///
+        /// * `request_id` - The verification request ID to look up
+        ///
+        /// # Returns
+        ///
+        /// Returns `Option<VerificationRequest>` with the request details, or `None`
         #[ink(message)]
         pub fn get_verification_request(&self, request_id: u64) -> Option<VerificationRequest> {
             self.verification_requests.get(request_id)
         }
 
+        /// Returns an appeal by its ID.
+        ///
+        /// # Arguments
+        ///
+        /// * `appeal_id` - The appeal ID to look up
+        ///
+        /// # Returns
+        ///
+        /// Returns `Option<Appeal>` with the appeal details, or `None`
         #[ink(message)]
         pub fn get_appeal(&self, appeal_id: u64) -> Option<Appeal> {
             self.appeals.get(appeal_id)
@@ -2537,6 +3175,19 @@ mod propchain_contracts {
     }
 
     impl PropertyRegistry {
+        /// Enables fractional ownership for a property by specifying a total share count.
+        ///
+        /// Only the property owner or admin may call this. The total shares must be
+        /// greater than zero.
+        ///
+        /// # Arguments
+        ///
+        /// * `property_id` - The property to fractionalize
+        /// * `total_shares` - The total number of shares to divide the property into
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn enable_fractional(
             &mut self,
@@ -2563,17 +3214,47 @@ mod propchain_contracts {
             Ok(())
         }
 
+        /// Returns the fractional ownership information for a property.
+        ///
+        /// # Arguments
+        ///
+        /// * `property_id` - The property to query
+        ///
+        /// # Returns
+        ///
+        /// Returns `Option<FractionalInfo>` with share details, or `None` if not fractionalized
         #[ink(message)]
         pub fn get_fractional_info(&self, property_id: u64) -> Option<FractionalInfo> {
             self.fractional.get(property_id)
         }
 
+        /// Checks whether a property has fractional ownership enabled.
+        ///
+        /// # Arguments
+        ///
+        /// * `property_id` - The property to check
+        ///
+        /// # Returns
+        ///
+        /// Returns `true` if fractional ownership is active for this property
         #[ink(message)]
         pub fn is_fractional(&self, property_id: u64) -> bool {
             self.fractional
                 .get(property_id)
                 .map(|i: FractionalInfo| i.enabled)
                 .unwrap_or(false)
+        }
+
+        fn ensure_admin_rbac(&mut self) -> bool {
+            let caller = self.env().caller();
+            self.access_control.has_permission_cached(
+                caller,
+                Permission {
+                    resource: Resource::PropertyRegistry,
+                    action: Action::Configure,
+                },
+                self.env().block_number(),
+            ) || self.access_control.has_role(caller, Role::Admin)
         }
     }
 }

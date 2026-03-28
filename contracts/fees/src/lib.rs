@@ -182,19 +182,29 @@ mod propchain_fees {
         fn error_code(&self) -> u32 {
             match self {
                 FeeError::Unauthorized => propchain_traits::errors::fee_codes::FEE_UNAUTHORIZED,
-                FeeError::AuctionNotFound => propchain_traits::errors::fee_codes::FEE_AUCTION_NOT_FOUND,
+                FeeError::AuctionNotFound => {
+                    propchain_traits::errors::fee_codes::FEE_AUCTION_NOT_FOUND
+                }
                 FeeError::AuctionEnded => propchain_traits::errors::fee_codes::FEE_AUCTION_ENDED,
-                FeeError::AuctionNotEnded => propchain_traits::errors::fee_codes::FEE_AUCTION_NOT_ENDED,
+                FeeError::AuctionNotEnded => {
+                    propchain_traits::errors::fee_codes::FEE_AUCTION_NOT_ENDED
+                }
                 FeeError::BidTooLow => propchain_traits::errors::fee_codes::FEE_BID_TOO_LOW,
-                FeeError::AlreadySettled => propchain_traits::errors::fee_codes::FEE_ALREADY_SETTLED,
+                FeeError::AlreadySettled => {
+                    propchain_traits::errors::fee_codes::FEE_ALREADY_SETTLED
+                }
                 FeeError::InvalidConfig => propchain_traits::errors::fee_codes::FEE_INVALID_CONFIG,
-                FeeError::InvalidProperty => propchain_traits::errors::fee_codes::FEE_INVALID_PROPERTY,
+                FeeError::InvalidProperty => {
+                    propchain_traits::errors::fee_codes::FEE_INVALID_PROPERTY
+                }
             }
         }
 
         fn error_description(&self) -> &'static str {
             match self {
-                FeeError::Unauthorized => "Caller does not have permission to perform this operation",
+                FeeError::Unauthorized => {
+                    "Caller does not have permission to perform this operation"
+                }
                 FeeError::AuctionNotFound => "The specified auction does not exist",
                 FeeError::AuctionEnded => "This auction has already ended",
                 FeeError::AuctionNotEnded => "The auction is still active and has not ended",
@@ -816,7 +826,7 @@ mod propchain_fees {
         fn test_dynamic_fee_calculation() {
             let contract = FeeManager::new(1000, 100, 100_000);
             let fee = contract.calculate_fee(FeeOperation::RegisterProperty);
-            assert!(fee >= 100 && fee <= 100_000);
+            assert!((100..=100_000).contains(&fee));
         }
 
         #[ink::test]

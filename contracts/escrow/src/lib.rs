@@ -3,9 +3,9 @@
 #![allow(clippy::too_many_arguments)]
 
 use ink::storage::Mapping;
+use propchain_traits::*;
 #[cfg(not(feature = "std"))]
 use scale_info::prelude::{string::String, vec::Vec};
-use propchain_traits::*;
 
 pub mod tests;
 
@@ -71,16 +71,32 @@ mod propchain_escrow {
                 Error::EscrowNotFound => propchain_traits::errors::escrow_codes::ESCROW_NOT_FOUND,
                 Error::Unauthorized => propchain_traits::errors::escrow_codes::UNAUTHORIZED_ACCESS,
                 Error::InvalidStatus => propchain_traits::errors::escrow_codes::INVALID_STATUS,
-                Error::InsufficientFunds => propchain_traits::errors::escrow_codes::INSUFFICIENT_ESCROW_FUNDS,
-                Error::ConditionsNotMet => propchain_traits::errors::escrow_codes::CONDITIONS_NOT_MET,
-                Error::SignatureThresholdNotMet => propchain_traits::errors::escrow_codes::SIGNATURE_THRESHOLD_NOT_MET,
-                Error::AlreadySigned => propchain_traits::errors::escrow_codes::ALREADY_SIGNED_ESCROW,
-                Error::DocumentNotFound => propchain_traits::errors::escrow_codes::DOCUMENT_NOT_FOUND,
+                Error::InsufficientFunds => {
+                    propchain_traits::errors::escrow_codes::INSUFFICIENT_ESCROW_FUNDS
+                }
+                Error::ConditionsNotMet => {
+                    propchain_traits::errors::escrow_codes::CONDITIONS_NOT_MET
+                }
+                Error::SignatureThresholdNotMet => {
+                    propchain_traits::errors::escrow_codes::SIGNATURE_THRESHOLD_NOT_MET
+                }
+                Error::AlreadySigned => {
+                    propchain_traits::errors::escrow_codes::ALREADY_SIGNED_ESCROW
+                }
+                Error::DocumentNotFound => {
+                    propchain_traits::errors::escrow_codes::DOCUMENT_NOT_FOUND
+                }
                 Error::DisputeActive => propchain_traits::errors::escrow_codes::DISPUTE_ACTIVE,
                 Error::TimeLockActive => propchain_traits::errors::escrow_codes::TIME_LOCK_ACTIVE,
-                Error::InvalidConfiguration => propchain_traits::errors::escrow_codes::INVALID_CONFIGURATION,
-                Error::EscrowAlreadyFunded => propchain_traits::errors::escrow_codes::ESCROW_ALREADY_FUNDED,
-                Error::ParticipantNotFound => propchain_traits::errors::escrow_codes::PARTICIPANT_NOT_FOUND,
+                Error::InvalidConfiguration => {
+                    propchain_traits::errors::escrow_codes::INVALID_CONFIGURATION
+                }
+                Error::EscrowAlreadyFunded => {
+                    propchain_traits::errors::escrow_codes::ESCROW_ALREADY_FUNDED
+                }
+                Error::ParticipantNotFound => {
+                    propchain_traits::errors::escrow_codes::PARTICIPANT_NOT_FOUND
+                }
             }
         }
 
@@ -88,7 +104,9 @@ mod propchain_escrow {
             match self {
                 Error::EscrowNotFound => "The specified escrow does not exist",
                 Error::Unauthorized => "Caller does not have permission to perform this operation",
-                Error::InvalidStatus => "The escrow is not in the required state for this operation",
+                Error::InvalidStatus => {
+                    "The escrow is not in the required state for this operation"
+                }
                 Error::InsufficientFunds => "The escrow does not have sufficient funds",
                 Error::ConditionsNotMet => "Not all required conditions have been met",
                 Error::SignatureThresholdNotMet => "Insufficient signatures collected",

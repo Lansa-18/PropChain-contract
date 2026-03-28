@@ -84,8 +84,12 @@ mod bridge {
                 Error::TokenNotFound => "The specified token does not exist",
                 Error::InvalidChain => "The destination chain ID is invalid",
                 Error::BridgeNotSupported => "Cross-chain bridging is not supported for this token",
-                Error::InsufficientSignatures => "Not enough signatures collected for bridge operation",
-                Error::RequestExpired => "The bridge request has expired and can no longer be executed",
+                Error::InsufficientSignatures => {
+                    "Not enough signatures collected for bridge operation"
+                }
+                Error::RequestExpired => {
+                    "The bridge request has expired and can no longer be executed"
+                }
                 Error::AlreadySigned => "You have already signed this bridge request",
                 Error::InvalidRequest => "The bridge request is invalid or malformed",
                 Error::BridgePaused => "Bridge operations are temporarily paused",
@@ -224,8 +228,8 @@ mod bridge {
                     chain_name: format!("Chain-{}", chain_id),
                     bridge_contract_address: None,
                     is_active: true,
-                    gas_multiplier: 100,    // 1.0x multiplier
-                    confirmation_blocks: 6, // 6 block confirmations
+                    gas_multiplier: propchain_traits::constants::DEFAULT_GAS_MULTIPLIER,
+                    confirmation_blocks: propchain_traits::constants::DEFAULT_CONFIRMATION_BLOCKS,
                     supported_tokens: Vec::new(),
                 };
                 bridge.chain_info.insert(chain_id, &chain_info);

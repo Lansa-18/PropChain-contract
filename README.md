@@ -87,7 +87,14 @@ cargo test                 # Run all tests including integration
 ./scripts/test.sh                      # Run all tests
 ./scripts/test.sh --coverage           # Run with coverage
 ./scripts/e2e-test.sh                  # Run E2E tests
+
+# Load Testing (Performance Validation)
+./scripts/load_test.sh                 # Run full load test suite
+cargo test --package propchain-tests load_test_concurrent_registration_light --release  # Quick validation
+cargo test --package propchain-tests stress_test_mass_registration --release  # Stress test
 ```
+
+For comprehensive load testing documentation, see [Load Testing Guide](docs/LOAD_TESTING_GUIDE.md).
 
 ## 🌐 Network Configuration
 
@@ -113,6 +120,13 @@ TARGET=wasm32-unknown-unknown
 ```
 
 ## 📚 Documentation & Resources
+
+### 🏗️ Architecture Documentation (NEW!)
+- **[📋 Architecture Index](./docs/ARCHITECTURE_INDEX.md)** - Complete guide to all architecture docs
+- **[🌐 System Architecture Overview](./docs/SYSTEM_ARCHITECTURE_OVERVIEW.md)** - High-level system design and components
+- **[🔗 Component Interaction Diagrams](./docs/COMPONENT_INTERACTION_DIAGRAMS.md)** - Detailed interaction sequences
+- **[📐 Architectural Principles](./docs/ARCHITECTURAL_PRINCIPLES.md)** - Design philosophy and decisions
+- **[📝 Documentation Maintenance](./docs/ARCHITECTURE_DOCUMENTATION_MAINTENANCE.md)** - How we keep docs current
 
 ### Contract Documentation
 - **[📖 Contract API](./docs/contracts.md)** - Complete contract interface documentation

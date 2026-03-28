@@ -497,14 +497,13 @@ mod ipfs_metadata {
             }
 
             // Validate MIME type if restrictions are set
-            if !self.validation_rules.allowed_mime_types.is_empty() {
-                if !self
+            if !self.validation_rules.allowed_mime_types.is_empty()
+                && !self
                     .validation_rules
                     .allowed_mime_types
                     .contains(&mime_type)
-                {
-                    return Err(Error::FileTypeNotAllowed);
-                }
+            {
+                return Err(Error::FileTypeNotAllowed);
             }
 
             // Increment document counter

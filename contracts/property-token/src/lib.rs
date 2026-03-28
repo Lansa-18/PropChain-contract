@@ -1,5 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![allow(unexpected_cfgs)]
+#![allow(
+    unexpected_cfgs,
+    clippy::type_complexity,
+    clippy::needless_borrows_for_generic_args
+)]
 
 use ink::prelude::string::String;
 use ink::storage::Mapping;
@@ -66,6 +70,8 @@ mod property_token {
         ProposalClosed,
         /// Ask not found
         AskNotFound,
+        /// Input batch exceeds maximum allowed size
+        BatchSizeExceeded,
     }
 
     impl core::fmt::Display for Error {
@@ -80,7 +86,9 @@ mod property_token {
                 Error::BridgeNotSupported => write!(f, "Bridge functionality not supported"),
                 Error::InvalidChain => write!(f, "Invalid chain ID"),
                 Error::BridgeLocked => write!(f, "Token is locked in bridge"),
-                Error::InsufficientSignatures => write!(f, "Insufficient signatures for bridge operation"),
+                Error::InsufficientSignatures => {
+                    write!(f, "Insufficient signatures for bridge operation")
+                }
                 Error::RequestExpired => write!(f, "Bridge request has expired"),
                 Error::InvalidRequest => write!(f, "Invalid bridge request"),
                 Error::BridgePaused => write!(f, "Bridge operations are paused"),
@@ -95,6 +103,7 @@ mod property_token {
                 Error::ProposalNotFound => write!(f, "Proposal not found"),
                 Error::ProposalClosed => write!(f, "Proposal is closed"),
                 Error::AskNotFound => write!(f, "Ask not found"),
+                Error::BatchSizeExceeded => write!(f, "Input batch exceeds maximum allowed size"),
             }
         }
     }
@@ -126,6 +135,7 @@ mod property_token {
                 Error::ProposalNotFound => property_token_codes::PROPOSAL_NOT_FOUND,
                 Error::ProposalClosed => property_token_codes::PROPOSAL_CLOSED,
                 Error::AskNotFound => property_token_codes::ASK_NOT_FOUND,
+                Error::BatchSizeExceeded => property_token_codes::BATCH_SIZE_EXCEEDED,
             }
         }
 
@@ -140,14 +150,20 @@ mod property_token {
                 Error::BridgeNotSupported => "Cross-chain bridging is not supported for this token",
                 Error::InvalidChain => "The destination chain ID is invalid",
                 Error::BridgeLocked => "The token is currently locked in a bridge operation",
-                Error::InsufficientSignatures => "Not enough signatures collected for bridge operation",
-                Error::RequestExpired => "The bridge request has expired and can no longer be executed",
+                Error::InsufficientSignatures => {
+                    "Not enough signatures collected for bridge operation"
+                }
+                Error::RequestExpired => {
+                    "The bridge request has expired and can no longer be executed"
+                }
                 Error::InvalidRequest => "The bridge request is invalid or malformed",
                 Error::BridgePaused => "Bridge operations are temporarily paused",
                 Error::GasLimitExceeded => "The operation exceeded the gas limit",
                 Error::MetadataCorruption => "The token metadata has been corrupted",
                 Error::InvalidBridgeOperator => "The bridge operator is not authorized",
-                Error::DuplicateBridgeRequest => "A bridge request with these parameters already exists",
+                Error::DuplicateBridgeRequest => {
+                    "A bridge request with these parameters already exists"
+                }
                 Error::BridgeTimeout => "The bridge operation timed out",
                 Error::AlreadySigned => "You have already signed this bridge request",
                 Error::InsufficientBalance => "Account has insufficient balance",
@@ -155,6 +171,9 @@ mod property_token {
                 Error::ProposalNotFound => "The governance proposal does not exist",
                 Error::ProposalClosed => "The governance proposal is closed for voting",
                 Error::AskNotFound => "The sell ask does not exist",
+                Error::BatchSizeExceeded => {
+                    "The input batch exceeds the maximum allowed size"
+                }
             }
         }
 
@@ -218,6 +237,7 @@ mod property_token {
         last_trade_price: Mapping<TokenId, u128>,
         compliance_registry: Option<AccountId>,
         tax_records: Mapping<(AccountId, TokenId), TaxRecord>,
+        max_batch_size: u32,
         /// Optional property-management contract for operational workflows
         property_management_contract: Option<AccountId>,
         /// On-chain management agent per property token (tokenized property)
@@ -686,6 +706,7 @@ mod property_token {
                 last_trade_price: Mapping::default(),
                 compliance_registry: None,
                 tax_records: Mapping::default(),
+                max_batch_size: 50,
                 property_management_contract: None,
                 management_agent: Mapping::default(),
             }
@@ -847,6 +868,9 @@ mod property_token {
         /// ERC-1155: Returns the balance of tokens for an account
         #[ink(message)]
         pub fn balance_of_batch(&self, accounts: Vec<AccountId>, ids: Vec<TokenId>) -> Vec<u128> {
+            if accounts.len() > self.max_batch_size as usize {
+                return Vec::new();
+            }
             let mut balances = Vec::new();
             for i in 0..accounts.len() {
                 if i < ids.len() {
@@ -873,6 +897,10 @@ mod property_token {
 
             if from != caller && !self.is_approved_for_all(from, caller) {
                 return Err(Error::Unauthorized);
+            }
+
+            if ids.len() > self.max_batch_size as usize {
+                return Err(Error::BatchSizeExceeded);
             }
 
             // Verify lengths match
@@ -923,6 +951,18 @@ mod property_token {
             ))
         }
 
+        /// Sets the compliance registry contract address (admin only).
+        ///
+        /// When set, compliance checks are delegated to this external contract
+        /// for share transfers and purchases.
+        ///
+        /// # Arguments
+        ///
+        /// * `registry` - The account ID of the compliance registry contract
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn set_compliance_registry(&mut self, registry: AccountId) -> Result<(), Error> {
             let caller = self.env().caller();
@@ -949,6 +989,7 @@ mod property_token {
             Ok(())
         }
 
+        /// Returns the linked property-management contract address, if set.
         #[ink(message)]
         pub fn get_property_management_contract(&self) -> Option<AccountId> {
             self.property_management_contract
@@ -967,10 +1008,20 @@ mod property_token {
                 return Err(Error::Unauthorized);
             }
             self.management_agent.insert(token_id, &agent);
-            self.env().emit_event(ManagementAgentAssigned { token_id, agent });
+            self.env()
+                .emit_event(ManagementAgentAssigned { token_id, agent });
             Ok(())
         }
 
+        /// Removes the management agent assignment for a token (owner or admin only).
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token to clear the management agent for
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn clear_management_agent(&mut self, token_id: TokenId) -> Result<(), Error> {
             let caller = self.env().caller();
@@ -983,21 +1034,38 @@ mod property_token {
             Ok(())
         }
 
+        /// Returns the management agent for a token, if one is assigned.
         #[ink(message)]
         pub fn get_management_agent(&self, token_id: TokenId) -> Option<AccountId> {
             self.management_agent.get(token_id)
         }
 
+        /// Returns the total number of fractional shares issued for a token.
         #[ink(message)]
         pub fn total_shares(&self, token_id: TokenId) -> u128 {
             self.total_shares.get(token_id).unwrap_or(0)
         }
 
+        /// Returns the fractional share balance for a given owner and token.
         #[ink(message)]
         pub fn share_balance_of(&self, owner: AccountId, token_id: TokenId) -> u128 {
             self.balances.get((owner, token_id)).unwrap_or(0)
         }
 
+        /// Issues new fractional shares for a token to a recipient (owner or admin only).
+        ///
+        /// Increases both the recipient's balance and the total share supply.
+        /// Dividend credits are updated to prevent dilution of existing holders.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token to issue shares for
+        /// * `to` - The recipient of the new shares
+        /// * `amount` - The number of shares to issue (must be greater than zero)
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn issue_shares(
             &mut self,
@@ -1028,6 +1096,20 @@ mod property_token {
             Ok(())
         }
 
+        /// Redeems (burns) fractional shares from an account.
+        ///
+        /// The caller must be the account holder or an approved operator.
+        /// Reduces both the holder's balance and the total share supply.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token whose shares are being redeemed
+        /// * `from` - The account to redeem shares from
+        /// * `amount` - The number of shares to redeem (must be greater than zero)
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn redeem_shares(
             &mut self,
@@ -1060,6 +1142,22 @@ mod property_token {
             Ok(())
         }
 
+        /// Transfers fractional shares between accounts with compliance checks.
+        ///
+        /// Both sender and recipient must pass compliance verification when a
+        /// compliance registry is configured. Dividend credits are updated for
+        /// both parties before the transfer.
+        ///
+        /// # Arguments
+        ///
+        /// * `from` - The account to transfer shares from
+        /// * `to` - The account to transfer shares to
+        /// * `token_id` - The token whose shares are being transferred
+        /// * `amount` - The number of shares to transfer (must be greater than zero)
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn transfer_shares(
             &mut self,
@@ -1092,6 +1190,19 @@ mod property_token {
             Ok(())
         }
 
+        /// Deposits dividends for distribution to all share holders of a token.
+        ///
+        /// The deposited value is distributed proportionally based on each holder's
+        /// share balance. Uses a scaled-integer approach (1e12 scaling factor) to
+        /// maintain precision across small balances.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token to deposit dividends for
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message, payable)]
         pub fn deposit_dividends(&mut self, token_id: TokenId) -> Result<(), Error> {
             let value = self.env().transferred_value();
@@ -1115,6 +1226,18 @@ mod property_token {
             Ok(())
         }
 
+        /// Withdraws accumulated dividends for the caller on a given token.
+        ///
+        /// Calculates any uncredited dividends, transfers the total owed amount
+        /// to the caller, and updates the tax record.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token to withdraw dividends from
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<u128, Error>` with the amount withdrawn
         #[ink(message)]
         pub fn withdraw_dividends(&mut self, token_id: TokenId) -> Result<u128, Error> {
             let caller = self.env().caller();
@@ -1147,6 +1270,20 @@ mod property_token {
             }
         }
 
+        /// Creates a governance proposal for a tokenized property.
+        ///
+        /// Only the token owner or admin may create proposals. Voting weight
+        /// is determined by each voter's share balance.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token the proposal applies to
+        /// * `quorum` - Minimum for-votes required for the proposal to pass
+        /// * `description_hash` - Hash of the off-chain proposal description
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<u64, Error>` with the new proposal ID
         #[ink(message)]
         pub fn create_proposal(
             &mut self,
@@ -1180,6 +1317,20 @@ mod property_token {
             Ok(counter)
         }
 
+        /// Casts a vote on an open governance proposal.
+        ///
+        /// Voting weight equals the caller's share balance for the token.
+        /// Each account may only vote once per proposal.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token the proposal belongs to
+        /// * `proposal_id` - The proposal to vote on
+        /// * `support` - `true` to vote in favor, `false` to vote against
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn vote(
             &mut self,
@@ -1221,6 +1372,18 @@ mod property_token {
             Ok(())
         }
 
+        /// Executes a governance proposal, closing voting and recording the outcome.
+        ///
+        /// A proposal passes if for-votes meet the quorum and exceed against-votes.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token the proposal belongs to
+        /// * `proposal_id` - The proposal to execute
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<bool, Error>` where `true` means the proposal passed
         #[ink(message)]
         pub fn execute_proposal(
             &mut self,
@@ -1250,6 +1413,20 @@ mod property_token {
             Ok(passed)
         }
 
+        /// Places a sell order (ask) for fractional shares on the marketplace.
+        ///
+        /// The specified shares are moved into escrow and a persistent ask is
+        /// created. Other accounts can fill the ask via `buy_shares`.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token whose shares are being offered
+        /// * `price_per_share` - Price per share in the native currency
+        /// * `amount` - Number of shares to sell
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn place_ask(
             &mut self,
@@ -1287,6 +1464,15 @@ mod property_token {
             Ok(())
         }
 
+        /// Cancels an active sell order and returns escrowed shares to the seller.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token whose ask is being cancelled
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn cancel_ask(&mut self, token_id: TokenId) -> Result<(), Error> {
             let seller = self.env().caller();
@@ -1304,6 +1490,21 @@ mod property_token {
             Ok(())
         }
 
+        /// Purchases fractional shares from an existing sell order.
+        ///
+        /// The caller must send exactly `price_per_share * amount` as the
+        /// transferred value. Both buyer and seller must pass compliance checks.
+        /// Proceeds are forwarded to the seller and a tax record is updated.
+        ///
+        /// # Arguments
+        ///
+        /// * `token_id` - The token whose shares are being purchased
+        /// * `seller` - The account that placed the sell order
+        /// * `amount` - Number of shares to buy
+        ///
+        /// # Returns
+        ///
+        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message, payable)]
         pub fn buy_shares(
             &mut self,
@@ -1373,11 +1574,24 @@ mod property_token {
             Ok(())
         }
 
+        /// Returns the last trade price per share for a token, if any trades have occurred.
         #[ink(message)]
         pub fn get_last_trade_price(&self, token_id: TokenId) -> Option<u128> {
             self.last_trade_price.get(token_id)
         }
 
+        /// Returns a portfolio summary for a set of tokens owned by an account.
+        ///
+        /// Each entry contains (token_id, share_balance, last_trade_price).
+        ///
+        /// # Arguments
+        ///
+        /// * `owner` - The account to query
+        /// * `token_ids` - The tokens to include in the portfolio summary
+        ///
+        /// # Returns
+        ///
+        /// Returns a vector of `(TokenId, balance, last_price)` tuples
         #[ink(message)]
         pub fn get_portfolio(
             &self,
@@ -1393,6 +1607,7 @@ mod property_token {
             out
         }
 
+        /// Returns the tax record for an account and token, summarizing dividends and sales.
         #[ink(message)]
         pub fn get_tax_record(&self, owner: AccountId, token_id: TokenId) -> TaxRecord {
             self.tax_records
@@ -1519,6 +1734,9 @@ mod property_token {
             &mut self,
             metadata_list: Vec<PropertyMetadata>,
         ) -> Result<Vec<TokenId>, Error> {
+            if metadata_list.len() > self.max_batch_size as usize {
+                return Err(Error::BatchSizeExceeded);
+            }
             let caller = self.env().caller();
             let mut issued_tokens = Vec::new();
             let current_time = self.env().block_timestamp();
@@ -2417,7 +2635,7 @@ mod property_token {
             self.error_counts.insert(&key, &(current_count + 1));
 
             // Update error rate (1 hour window)
-            let window_duration = 3600_000u64; // 1 hour in milliseconds
+            let window_duration = 3_600_000_u64; // 1 hour in milliseconds
             let rate_key = error_code.clone();
             let (mut count, window_start) =
                 self.error_rates.get(&rate_key).unwrap_or((0, timestamp));
@@ -2461,7 +2679,7 @@ mod property_token {
         #[ink(message)]
         pub fn get_error_rate(&self, error_code: String) -> u64 {
             let timestamp = self.env().block_timestamp();
-            let window_duration = 3600_000u64; // 1 hour
+            let window_duration = 3_600_000_u64; // 1 hour
 
             if let Some((count, window_start)) = self.error_rates.get(&error_code) {
                 if timestamp >= window_start + window_duration {
@@ -2483,11 +2701,7 @@ mod property_token {
             }
 
             let mut errors = Vec::new();
-            let start_id = if self.error_log_counter > limit as u64 {
-                self.error_log_counter - limit as u64
-            } else {
-                0
-            };
+            let start_id = self.error_log_counter.saturating_sub(limit as u64);
 
             for i in start_id..self.error_log_counter {
                 if let Some(entry) = self.recent_errors.get(&i) {
@@ -2918,14 +3132,9 @@ mod property_token {
             contract
                 .assign_management_agent(token_id, accounts.bob)
                 .expect("agent");
-            assert_eq!(
-                contract.get_management_agent(token_id),
-                Some(accounts.bob)
-            );
+            assert_eq!(contract.get_management_agent(token_id), Some(accounts.bob));
 
-            contract
-                .clear_management_agent(token_id)
-                .expect("clear");
+            contract.clear_management_agent(token_id).expect("clear");
             assert_eq!(contract.get_management_agent(token_id), None);
         }
     }
