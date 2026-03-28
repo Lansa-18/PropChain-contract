@@ -1051,7 +1051,8 @@ mod tests {
 
         let property_ids = contract
             .batch_register_properties(properties)
-            .expect("Failed to batch register");
+            .expect("Failed to batch register")
+            .successes;
         assert_eq!(property_ids.len(), 3);
         assert_eq!(property_ids, vec![1, 2, 3]);
         assert_eq!(contract.property_count(), 3);
@@ -1098,7 +1099,8 @@ mod tests {
 
         let property_ids = contract
             .batch_register_properties(properties)
-            .expect("Failed to batch register");
+            .expect("Failed to batch register")
+            .successes;
 
         // Transfer all properties to Bob
         assert!(contract
@@ -1148,7 +1150,8 @@ mod tests {
 
         let property_ids = contract
             .batch_register_properties(properties)
-            .expect("Failed to batch register");
+            .expect("Failed to batch register")
+            .successes;
 
         // Update metadata for all properties
         let updates = vec![
@@ -1221,7 +1224,8 @@ mod tests {
 
         let property_ids = contract
             .batch_register_properties(properties)
-            .expect("Failed to batch register");
+            .expect("Failed to batch register")
+            .successes;
 
         // Transfer properties to different recipients
         let transfers = vec![
@@ -1314,7 +1318,8 @@ mod tests {
 
         let property_ids = contract
             .batch_register_properties(properties)
-            .expect("Failed to batch register");
+            .expect("Failed to batch register")
+            .successes;
 
         // Get portfolio details
         let details = contract.get_portfolio_details(accounts.alice);
@@ -1581,7 +1586,8 @@ mod tests {
 
         let property_ids = contract
             .batch_register_properties(properties)
-            .expect("Failed to batch register");
+            .expect("Failed to batch register")
+            .successes;
 
         // Try to transfer as unauthorized user
         set_caller(accounts.bob);
@@ -1608,7 +1614,8 @@ mod tests {
 
         let property_ids = contract
             .batch_register_properties(properties)
-            .expect("Failed to batch register");
+            .expect("Failed to batch register")
+            .successes;
 
         // Try to update as unauthorized user
         set_caller(accounts.bob);
@@ -1639,7 +1646,7 @@ mod tests {
         let empty_properties: Vec<PropertyMetadata> = vec![];
         let result = contract.batch_register_properties(empty_properties);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 0);
+        assert_eq!(result.unwrap().successes.len(), 0);
 
         // Test empty batch transfer
         let empty_transfers: Vec<u64> = vec![];
@@ -1927,5 +1934,92 @@ mod tests {
             contract.update_batch_config(50, 0),
             Err(Error::InvalidMetadata)
         );
+    }
+
+    #[ink::test]
+    fn batch_register_properties_size_guard_works() {
+        let accounts = default_accounts();
+        set_caller(accounts.alice);
+        let mut contract = PropertyRegistry::new();
+
+        // Set max batch size to 2
+        contract.update_batch_config(2, 1).unwrap();
+
+        let properties = vec![
+            create_custom_metadata("Prop 1", 100, "Desc 1", 100000, "url1"),
+            create_custom_metadata("Prop 2", 200, "Desc 2", 200000, "url2"),
+            create_custom_metadata("Prop 3", 300, "Desc 3", 300000, "url3"),
+        ];
+
+        assert_eq!(
+            contract.batch_register_properties(properties),
+            Err(Error::BatchSizeExceeded)
+        );
+        assert_eq!(contract.property_count(), 0);
+    }
+
+    #[ink::test]
+    fn batch_register_properties_partial_success_works() {
+        let accounts = default_accounts();
+        set_caller(accounts.alice);
+        ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(1000);
+        let mut contract = PropertyRegistry::new();
+
+        let properties = vec![
+            create_custom_metadata("Valid Prop 1", 100, "Desc 1", 100000, "url1"),
+            create_custom_metadata("", 200, "Desc 2", 200000, "url2"), // Invalid: empty location
+            create_custom_metadata("Valid Prop 3", 300, "Desc 3", 300000, "url3"),
+        ];
+
+        let result = contract.batch_register_properties(properties).unwrap();
+
+        // 2 succeed, 1 fails
+        assert_eq!(result.successes.len(), 2);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures[0].index, 1);
+        assert_eq!(result.failures[0].error, Error::InvalidMetadata);
+        assert_eq!(result.metrics.total_items, 3);
+        assert_eq!(result.metrics.successful_items, 2);
+        assert_eq!(result.metrics.failed_items, 1);
+        assert!(!result.metrics.early_terminated);
+
+        // Verify IDs are contiguous
+        assert_eq!(result.successes, vec![1, 2]);
+        assert_eq!(contract.property_count(), 2);
+
+        // Verify properties exist and are correct
+        let prop1 = contract.get_property(1).unwrap();
+        assert_eq!(prop1.metadata.location, "Valid Prop 1");
+        let prop2 = contract.get_property(2).unwrap();
+        assert_eq!(prop2.metadata.location, "Valid Prop 3");
+    }
+
+    #[ink::test]
+    fn batch_register_properties_early_termination_works() {
+        let accounts = default_accounts();
+        set_caller(accounts.alice);
+        ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(1000);
+        let mut contract = PropertyRegistry::new();
+
+        // Set failure threshold to 2
+        contract.update_batch_config(50, 2).unwrap();
+
+        let properties = vec![
+            create_custom_metadata("Valid", 100, "Desc", 100000, "url"),
+            create_custom_metadata("", 200, "Desc", 200000, "url"),     // fail 1
+            create_custom_metadata("", 300, "Desc", 300000, "url"),     // fail 2 -> early terminate
+            create_custom_metadata("Never reached", 400, "Desc", 400000, "url"),
+        ];
+
+        let result = contract.batch_register_properties(properties).unwrap();
+
+        assert_eq!(result.successes.len(), 1);
+        assert_eq!(result.failures.len(), 2);
+        assert!(result.metrics.early_terminated);
+        assert_eq!(result.metrics.total_items, 4);
+
+        // Stats should record the early termination
+        let stats = contract.get_batch_stats();
+        assert_eq!(stats.total_early_terminations, 1);
     }
 }

@@ -1581,55 +1581,84 @@ mod propchain_contracts {
         pub fn batch_register_properties(
             &mut self,
             properties: Vec<PropertyMetadata>,
-        ) -> Result<Vec<u64>, Error> {
+        ) -> Result<BatchResult, Error> {
             self.ensure_not_paused()?;
-            let mut results = Vec::new();
+            self.validate_batch_size(properties.len())?;
+
             let caller = self.env().caller();
+            let timestamp = self.env().block_timestamp();
+            let total_items = properties.len() as u32;
+            let mut successes = Vec::new();
+            let mut failures = Vec::new();
+            let mut early_terminated = false;
+            let mut next_id = self.property_count + 1;
 
-            // Pre-calculate all property IDs to avoid repeated storage reads
-            let start_id = self.property_count + 1;
-            let end_id = start_id + properties.len() as u64 - 1;
-            self.property_count = end_id;
-
-            // Get existing owner properties to avoid repeated storage reads
             let mut owner_props = self.owner_properties.get(caller).unwrap_or_default();
 
             for (i, metadata) in properties.into_iter().enumerate() {
-                let property_id = start_id + i as u64;
+                // Check early termination
+                if failures.len() >= self.batch_config.max_failure_threshold as usize {
+                    early_terminated = true;
+                    break;
+                }
+
+                // Validate metadata
+                if metadata.location.is_empty() {
+                    failures.push(BatchItemFailure {
+                        index: i as u32,
+                        item_id: 0,
+                        error: Error::InvalidMetadata,
+                    });
+                    continue;
+                }
+
+                let property_id = next_id;
+                next_id += 1;
 
                 let property_info = PropertyInfo {
                     id: property_id,
                     owner: caller,
                     metadata,
-                    registered_at: self.env().block_timestamp(),
+                    registered_at: timestamp,
                 };
 
                 self.properties.insert(property_id, &property_info);
                 owner_props.push(property_id);
-
-                results.push(property_id);
+                successes.push(property_id);
             }
 
-            // Update owner properties once at the end
-            self.owner_properties.insert(caller, &owner_props);
+            // Update property count only if there were successes
+            if !successes.is_empty() {
+                self.property_count = next_id - 1;
+                self.owner_properties.insert(caller, &owner_props);
 
-            // Emit enhanced batch registration event
+                let transaction_hash: Hash = [0u8; 32].into();
+                self.env().emit_event(BatchPropertyRegistered {
+                    owner: caller,
+                    event_version: 1,
+                    property_ids: successes.clone(),
+                    count: successes.len() as u64,
+                    timestamp,
+                    block_number: self.env().block_number(),
+                    transaction_hash,
+                });
+            }
 
-            let transaction_hash: Hash = [0u8; 32].into();
-            self.env().emit_event(BatchPropertyRegistered {
-                owner: caller,
-                event_version: 1,
-                property_ids: results.clone(),
-                count: results.len() as u64,
-                timestamp: self.env().block_timestamp(),
-                block_number: self.env().block_number(),
-                transaction_hash,
-            });
+            let metrics = BatchMetrics {
+                total_items,
+                successful_items: successes.len() as u32,
+                failed_items: failures.len() as u32,
+                early_terminated,
+            };
 
-            // Track gas usage
+            self.record_batch_operation(0, &metrics);
             self.track_gas_usage("batch_register_properties".as_bytes());
 
-            Ok(results)
+            Ok(BatchResult {
+                successes,
+                failures,
+                metrics,
+            })
         }
 
         /// Batch transfers multiple properties to the same recipient
