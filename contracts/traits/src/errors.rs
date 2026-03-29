@@ -12,6 +12,9 @@ use scale::{Decode, Encode};
 #[cfg(feature = "std")]
 use scale_info::TypeInfo;
 
+/// =============================================================================
+/// Base Error Trait
+/// =============================================================================
 // =============================================================================
 // Base Error Trait
 // =============================================================================
@@ -38,6 +41,7 @@ pub trait ContractError: fmt::Debug + fmt::Display + Encode + Decode {
             6000..=6999 => ErrorCategory::Compliance,
             7000..=7999 => ErrorCategory::Governance,
             8000..=8999 => ErrorCategory::Staking,
+            9000..=9999 => ErrorCategory::Monitoring,
             _ => ErrorCategory::Unknown,
         }
     }
@@ -56,6 +60,7 @@ pub enum ErrorCategory {
     Compliance,
     Governance,
     Staking,
+    Monitoring,
     Unknown,
 }
 
@@ -71,11 +76,15 @@ impl fmt::Display for ErrorCategory {
             ErrorCategory::Compliance => write!(f, "Compliance"),
             ErrorCategory::Governance => write!(f, "Governance"),
             ErrorCategory::Staking => write!(f, "Staking"),
+            ErrorCategory::Monitoring => write!(f, "Monitoring"),
             ErrorCategory::Unknown => write!(f, "Unknown"),
         }
     }
 }
 
+/// =============================================================================
+/// Common Error Variants
+/// =============================================================================
 // =============================================================================
 // Common Error Variants
 // =============================================================================
@@ -152,6 +161,9 @@ impl ContractError for CommonError {
     }
 }
 
+/// =============================================================================
+/// Error Code Constants
+/// =============================================================================
 // =============================================================================
 // Error Code Constants
 // =============================================================================
@@ -297,4 +309,13 @@ pub mod staking_codes {
     pub const STAKING_ALREADY_STAKED: u32 = 8008;
     pub const STAKING_INVALID_DELEGATE: u32 = 8009;
     pub const STAKING_ZERO_AMOUNT: u32 = 8010;
+}
+
+/// Monitoring error codes (9000-9999)
+pub mod monitoring_codes {
+    pub const MONITORING_UNAUTHORIZED: u32 = 9001;
+    pub const MONITORING_CONTRACT_PAUSED: u32 = 9002;
+    pub const MONITORING_INVALID_THRESHOLD: u32 = 9003;
+    pub const MONITORING_SUBSCRIBER_LIMIT_REACHED: u32 = 9004;
+    pub const MONITORING_SUBSCRIBER_NOT_FOUND: u32 = 9005;
 }

@@ -7,6 +7,7 @@
 
 // Core test modules
 pub mod test_utils;
+pub mod tax_compliance;
 pub mod load_tests;                    // Load testing framework
 pub mod load_test_property_registration;  // Registration load tests
 pub mod load_test_property_transfer;      // Transfer load tests

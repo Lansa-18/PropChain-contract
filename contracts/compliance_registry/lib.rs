@@ -1,4 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
+#![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::upper_case_acronyms)]
 #![allow(
     clippy::upper_case_acronyms,
     clippy::too_many_arguments,
@@ -174,6 +177,69 @@ mod compliance_registry {
         pub data_retention_until: Timestamp,
     }
 
+    /// Tax-specific compliance status reported by the tax compliance module
+    #[derive(Debug, Clone, Copy, scale::Encode, scale::Decode)]
+    #[cfg_attr(
+        feature = "std",
+        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+    )]
+    pub struct TaxComplianceStatus {
+        pub jurisdiction_code: u32,
+        pub reporting_period: u64,
+        pub last_checked_at: Timestamp,
+        pub last_payment_at: Timestamp,
+        pub outstanding_tax: Balance,
+        pub reporting_submitted: bool,
+        pub legal_documents_verified: bool,
+        pub clearance_expiry: Timestamp,
+        pub violation_count: u32,
+    }
+
+    /// Metadata for a supported tax jurisdiction.
+    #[derive(Debug, Clone, Copy, scale::Encode, scale::Decode)]
+    #[cfg_attr(
+        feature = "std",
+        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+    )]
+    pub struct TaxJurisdictionRecord {
+        pub jurisdiction_code: u32,
+        pub reporting_cycle_days: u32,
+        pub requires_legal_clearance: bool,
+        pub authority_hash: [u8; 32],
+    }
+
+    /// Historical tax record snapshot synced from the tax compliance module.
+    #[derive(Debug, Clone, Copy, scale::Encode, scale::Decode)]
+    #[cfg_attr(
+        feature = "std",
+        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+    )]
+    pub struct TaxComplianceRecord {
+        pub jurisdiction_code: u32,
+        pub reporting_period: u64,
+        pub outstanding_tax: Balance,
+        pub reporting_submitted: bool,
+        pub legal_documents_verified: bool,
+        pub last_checked_at: Timestamp,
+        pub violation_count: u32,
+    }
+
+    /// Tax-specific audit entry for monitoring and regulator review.
+    #[derive(Debug, Clone, Copy, scale::Encode, scale::Decode)]
+    #[cfg_attr(
+        feature = "std",
+        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+    )]
+    pub struct TaxAuditTrailEntry {
+        pub account: AccountId,
+        pub jurisdiction_code: u32,
+        pub reporting_period: u64,
+        pub outstanding_tax: Balance,
+        pub violation_count: u32,
+        pub timestamp: Timestamp,
+        pub synced_by: AccountId,
+    }
+
     /// Compliance audit log entry
     #[derive(Debug, Clone, Copy, scale::Encode, scale::Decode)]
     #[cfg_attr(
@@ -244,6 +310,18 @@ mod compliance_registry {
         account_requests: Mapping<AccountId, u64>,
         /// ZK compliance contract address (optional)
         zk_compliance_contract: Option<AccountId>,
+        /// Authorized tax compliance modules
+        tax_modules: Mapping<AccountId, bool>,
+        /// Optional tax compliance state per account
+        tax_compliance_status: Mapping<AccountId, TaxComplianceStatus>,
+        /// Tax jurisdiction metadata
+        tax_jurisdictions: Mapping<u32, TaxJurisdictionRecord>,
+        /// Historical tax record snapshots per account
+        tax_records: Mapping<(AccountId, u64), TaxComplianceRecord>,
+        /// Historical tax record counters per account
+        tax_record_count: Mapping<AccountId, u64>,
+        /// Tax audit trail per account
+        tax_audit_logs: Mapping<(AccountId, u64), TaxAuditTrailEntry>,
     }
 
     /// Errors
@@ -414,6 +492,15 @@ mod compliance_registry {
         timestamp: Timestamp,
     }
 
+    #[ink(event)]
+    pub struct TaxComplianceStatusUpdated {
+        #[ink(topic)]
+        account: AccountId,
+        jurisdiction_code: u32,
+        outstanding_tax: Balance,
+        timestamp: Timestamp,
+    }
+
     /// Compliance report for an account (audit trail and reporting - Issue #45)
     #[derive(Debug, Clone, scale::Encode, scale::Decode)]
     #[cfg_attr(
@@ -432,6 +519,8 @@ mod compliance_registry {
         pub audit_log_count: u64,
         pub last_audit_timestamp: Timestamp,
         pub verification_expiry: Timestamp,
+        pub tax_compliant: bool,
+        pub outstanding_tax: Balance,
     }
 
     /// Verification workflow status (workflow management - Issue #45)
@@ -499,6 +588,12 @@ mod compliance_registry {
                 service_providers: Mapping::default(),
                 account_requests: Mapping::default(),
                 zk_compliance_contract: None,
+                tax_modules: Mapping::default(),
+                tax_compliance_status: Mapping::default(),
+                tax_jurisdictions: Mapping::default(),
+                tax_records: Mapping::default(),
+                tax_record_count: Mapping::default(),
+                tax_audit_logs: Mapping::default(),
             };
 
             // Initialize default jurisdiction rules
@@ -710,6 +805,7 @@ mod compliance_registry {
                         && data.sanctions_checked
                         && data.gdpr_consent == ConsentStatus::Given
                         && now <= data.data_retention_until
+                        && self.is_tax_status_compliant(account, now)
                 }
                 None => false,
             }
@@ -735,6 +831,93 @@ mod compliance_registry {
         #[ink(message)]
         pub fn get_compliance_data(&self, account: AccountId) -> Option<ComplianceData> {
             self.compliance_data.get(account)
+        }
+
+        /// Allow an admin to register a dedicated tax module that may sync tax status.
+        #[ink(message)]
+        pub fn set_tax_module(&mut self, module: AccountId, active: bool) -> Result<()> {
+            self.ensure_owner()?;
+            self.tax_modules.insert(module, &active);
+            Ok(())
+        }
+
+        /// Register metadata for a supported tax jurisdiction.
+        #[ink(message)]
+        pub fn configure_tax_jurisdiction(&mut self, record: TaxJurisdictionRecord) -> Result<()> {
+            self.ensure_owner()?;
+            self.tax_jurisdictions
+                .insert(record.jurisdiction_code, &record);
+            Ok(())
+        }
+
+        /// Fetch tax jurisdiction metadata.
+        #[ink(message)]
+        pub fn get_tax_jurisdiction(
+            &self,
+            jurisdiction_code: u32,
+        ) -> Option<TaxJurisdictionRecord> {
+            self.tax_jurisdictions.get(jurisdiction_code)
+        }
+
+        /// Update account tax compliance state from a trusted verifier or tax module.
+        #[ink(message)]
+        pub fn update_tax_compliance_status(
+            &mut self,
+            account: AccountId,
+            status: TaxComplianceStatus,
+        ) -> Result<()> {
+            self.ensure_tax_authority()?;
+            self.tax_compliance_status.insert(account, &status);
+            self.append_tax_record(account, status);
+            self.append_tax_audit_entry(account, status);
+            self.log_audit_event(account, 4); // 4 = tax compliance sync
+
+            self.env().emit_event(TaxComplianceStatusUpdated {
+                account,
+                jurisdiction_code: status.jurisdiction_code,
+                outstanding_tax: status.outstanding_tax,
+                timestamp: self.env().block_timestamp(),
+            });
+
+            Ok(())
+        }
+
+        /// Get the latest synced tax compliance state for an account.
+        #[ink(message)]
+        pub fn get_tax_compliance_status(&self, account: AccountId) -> Option<TaxComplianceStatus> {
+            self.tax_compliance_status.get(account)
+        }
+
+        /// Fetch recent synced tax records for an account.
+        #[ink(message)]
+        pub fn get_tax_records(&self, account: AccountId, limit: u64) -> Vec<TaxComplianceRecord> {
+            let count = self.tax_record_count.get(account).unwrap_or(0);
+            let start = count.saturating_sub(limit);
+            let mut records = Vec::new();
+            for index in start..count {
+                if let Some(record) = self.tax_records.get((account, index)) {
+                    records.push(record);
+                }
+            }
+            records
+        }
+
+        /// Fetch recent tax audit trail entries for an account.
+        #[ink(message)]
+        pub fn get_tax_audit_trail(
+            &self,
+            account: AccountId,
+            limit: u64,
+        ) -> Vec<TaxAuditTrailEntry> {
+            let count = self.tax_record_count.get(account).unwrap_or(0);
+            let start = count.saturating_sub(limit);
+            let mut entries = Vec::new();
+            for index in start..count {
+                if let Some(entry) = self.tax_audit_logs.get((account, index)) {
+                    entries.push(entry);
+                }
+            }
+            entries
         }
 
         /// Update AML status with detailed risk factors
@@ -1256,6 +1439,12 @@ mod compliance_registry {
                 audit_log_count: audit_count,
                 last_audit_timestamp: last_audit,
                 verification_expiry: data.expiry_timestamp,
+                tax_compliant: self.is_tax_status_compliant(account, self.env().block_timestamp()),
+                outstanding_tax: self
+                    .tax_compliance_status
+                    .get(account)
+                    .map(|status| status.outstanding_tax)
+                    .unwrap_or(0),
             })
         }
 
@@ -1327,6 +1516,72 @@ mod compliance_registry {
                 return Err(Error::NotAuthorized);
             }
             Ok(())
+        }
+
+        fn ensure_tax_authority(&self) -> Result<()> {
+            let caller = self.env().caller();
+            if self.env().caller() == self.owner
+                || self.verifiers.get(caller).unwrap_or(false)
+                || self.tax_modules.get(caller).unwrap_or(false)
+            {
+                return Ok(());
+            }
+            Err(Error::NotAuthorized)
+        }
+
+        fn is_tax_status_compliant(&self, account: AccountId, now: Timestamp) -> bool {
+            match self.tax_compliance_status.get(account) {
+                Some(status) => {
+                    let jurisdiction_requires_legal_clearance = self
+                        .tax_jurisdictions
+                        .get(status.jurisdiction_code)
+                        .map(|item| item.requires_legal_clearance)
+                        .unwrap_or(true);
+                    status.outstanding_tax == 0
+                        && status.reporting_submitted
+                        && (!jurisdiction_requires_legal_clearance
+                            || status.legal_documents_verified)
+                        && (status.clearance_expiry == 0 || status.clearance_expiry >= now)
+                }
+                None => true,
+            }
+        }
+
+        fn append_tax_record(&mut self, account: AccountId, status: TaxComplianceStatus) {
+            let count = self.tax_record_count.get(account).unwrap_or(0);
+            self.tax_records.insert(
+                (account, count),
+                &TaxComplianceRecord {
+                    jurisdiction_code: status.jurisdiction_code,
+                    reporting_period: status.reporting_period,
+                    outstanding_tax: status.outstanding_tax,
+                    reporting_submitted: status.reporting_submitted,
+                    legal_documents_verified: status.legal_documents_verified,
+                    last_checked_at: status.last_checked_at,
+                    violation_count: status.violation_count,
+                },
+            );
+            self.tax_record_count.insert(account, &(count + 1));
+        }
+
+        fn append_tax_audit_entry(&mut self, account: AccountId, status: TaxComplianceStatus) {
+            let index = self
+                .tax_record_count
+                .get(account)
+                .unwrap_or(1)
+                .saturating_sub(1);
+            self.tax_audit_logs.insert(
+                (account, index),
+                &TaxAuditTrailEntry {
+                    account,
+                    jurisdiction_code: status.jurisdiction_code,
+                    reporting_period: status.reporting_period,
+                    outstanding_tax: status.outstanding_tax,
+                    violation_count: status.violation_count,
+                    timestamp: self.env().block_timestamp(),
+                    synced_by: self.env().caller(),
+                },
+            );
         }
 
         fn log_audit_event(&mut self, account: AccountId, action: u8) {
@@ -1607,6 +1862,130 @@ mod compliance_registry {
             let contract = ComplianceRegistry::new();
             let summary = contract.get_sanctions_screening_summary();
             assert!(!summary.lists_checked.is_empty());
+        }
+
+        #[ink::test]
+        fn tax_status_extends_compliance_checks_without_breaking_existing_flow() {
+            let mut contract = ComplianceRegistry::new();
+            let user = AccountId::from([0x07; 32]);
+            let kyc_hash = [7u8; 32];
+
+            contract
+                .submit_verification(
+                    user,
+                    Jurisdiction::US,
+                    kyc_hash,
+                    RiskLevel::Low,
+                    DocumentType::Passport,
+                    BiometricMethod::None,
+                    10,
+                )
+                .expect("submit");
+            contract
+                .update_aml_status(
+                    user,
+                    true,
+                    AMLRiskFactors {
+                        pep_status: false,
+                        high_risk_country: false,
+                        suspicious_transaction_pattern: false,
+                        large_transaction_volume: false,
+                        source_of_funds_verified: true,
+                    },
+                )
+                .expect("aml");
+            contract
+                .update_sanctions_status(user, true, SanctionsList::OFAC)
+                .expect("sanctions");
+            contract
+                .update_consent(user, ConsentStatus::Given)
+                .expect("consent");
+
+            assert!(contract.is_compliant(user));
+
+            contract
+                .update_tax_compliance_status(
+                    user,
+                    TaxComplianceStatus {
+                        jurisdiction_code: 1001,
+                        reporting_period: 1,
+                        last_checked_at: 1,
+                        last_payment_at: 0,
+                        outstanding_tax: 25,
+                        reporting_submitted: false,
+                        legal_documents_verified: false,
+                        clearance_expiry: 0,
+                        violation_count: 1,
+                    },
+                )
+                .expect("tax sync");
+
+            assert!(!contract.is_compliant(user));
+
+            contract
+                .update_tax_compliance_status(
+                    user,
+                    TaxComplianceStatus {
+                        jurisdiction_code: 1001,
+                        reporting_period: 1,
+                        last_checked_at: 2,
+                        last_payment_at: 2,
+                        outstanding_tax: 0,
+                        reporting_submitted: true,
+                        legal_documents_verified: true,
+                        clearance_expiry: 10_000,
+                        violation_count: 0,
+                    },
+                )
+                .expect("tax clear");
+
+            let report = contract.get_compliance_report(user).expect("report");
+            assert!(contract.is_compliant(user));
+            assert!(report.tax_compliant);
+            assert_eq!(report.outstanding_tax, 0);
+        }
+
+        #[ink::test]
+        fn tax_records_and_jurisdiction_metadata_are_persisted() {
+            let mut contract = ComplianceRegistry::new();
+            let user = AccountId::from([0x08; 32]);
+
+            contract
+                .configure_tax_jurisdiction(TaxJurisdictionRecord {
+                    jurisdiction_code: 1001,
+                    reporting_cycle_days: 365,
+                    requires_legal_clearance: true,
+                    authority_hash: [8u8; 32],
+                })
+                .expect("jurisdiction");
+
+            contract
+                .update_tax_compliance_status(
+                    user,
+                    TaxComplianceStatus {
+                        jurisdiction_code: 1001,
+                        reporting_period: 7,
+                        last_checked_at: 50,
+                        last_payment_at: 40,
+                        outstanding_tax: 12,
+                        reporting_submitted: false,
+                        legal_documents_verified: false,
+                        clearance_expiry: 0,
+                        violation_count: 2,
+                    },
+                )
+                .expect("tax status");
+
+            let jurisdiction = contract.get_tax_jurisdiction(1001).expect("metadata");
+            let records = contract.get_tax_records(user, 5);
+            let audit = contract.get_tax_audit_trail(user, 5);
+
+            assert_eq!(jurisdiction.reporting_cycle_days, 365);
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].reporting_period, 7);
+            assert_eq!(audit.len(), 1);
+            assert_eq!(audit[0].jurisdiction_code, 1001);
+            assert_eq!(audit[0].violation_count, 2);
         }
     }
 }

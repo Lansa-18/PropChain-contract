@@ -1,8 +1,8 @@
-/// Centralized configuration constants for PropChain contracts.
-///
-/// All magic numbers are extracted here with documentation explaining
-/// their purpose and valid ranges. Contracts import from this module
-/// instead of using inline literals.
+// Centralized configuration constants for PropChain contracts.
+//
+// All magic numbers are extracted here with documentation explaining
+// their purpose and valid ranges. Contracts import from this module
+// instead of using inline literals.
 
 // ── Oracle Constants ─────────────────────────────────────────────────────────
 
@@ -134,3 +134,39 @@ pub const MULTIPLIER_90_DAYS: u128 = 175;
 
 /// Lock-period reward multiplier: 1 year = 3x.
 pub const MULTIPLIER_1_YEAR: u128 = 300;
+
+// ── Monitoring Constants ─────────────────────────────────────────────────────
+
+/// Maximum number of alert subscribers per monitoring contract.
+pub const MONITORING_MAX_SUBSCRIBERS: usize = 50;
+
+/// Maximum number of metrics snapshots stored (circular buffer size).
+pub const MONITORING_MAX_SNAPSHOTS: u64 = 100;
+
+/// Default error-rate threshold for HighErrorRate alerts (10% = 1000 bips).
+pub const MONITORING_DEFAULT_ERROR_RATE_THRESHOLD_BIPS: u32 = 1_000;
+
+/// Error rate bips at which health status becomes Degraded (10%).
+pub const MONITORING_DEGRADED_THRESHOLD_BIPS: u32 = 1_000;
+
+/// Error rate bips at which health status becomes Critical (25%).
+pub const MONITORING_CRITICAL_THRESHOLD_BIPS: u32 = 2_500;
+
+/// Minimum milliseconds between repeated alert emissions for the same alert type (5 minutes).
+pub const MONITORING_ALERT_COOLDOWN_MS: u64 = 300_000;
+// ── Validation Constants ────────────────────────────────────────────────────
+
+/// Maximum batch operation size to prevent DoS via gas exhaustion.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Maximum length for reason/resolution strings.
+pub const MAX_REASON_LENGTH: u32 = 2_000;
+
+/// Maximum length for URL strings (evidence_url, metadata_url, documents_url).
+pub const MAX_URL_LENGTH: u32 = 2_048;
+
+/// Maximum pause duration in seconds (30 days).
+pub const MAX_PAUSE_DURATION: u64 = 2_592_000;
+
+/// Minimum pause duration in seconds (1 minute).
+pub const MIN_PAUSE_DURATION: u64 = 60;

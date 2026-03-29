@@ -3,11 +3,13 @@
 pub mod access_control;
 pub mod constants;
 pub mod errors;
+pub mod monitoring;
 
 pub use access_control::*;
 pub use errors::*;
 use ink::prelude::string::String;
 use ink::primitives::AccountId;
+pub use monitoring::*;
 
 /// Error types for the Property Valuation Oracle
 #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
