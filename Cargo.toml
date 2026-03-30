@@ -17,6 +17,7 @@ members = [
     "contracts/tax-compliance",
     "contracts/fractional",
     "contracts/prediction-market",
+    "contracts/crowdfunding",
     "contracts/lending",
     "contracts/metadata",
     "contracts/database",
