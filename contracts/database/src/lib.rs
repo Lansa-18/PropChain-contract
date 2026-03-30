@@ -574,6 +574,63 @@ mod propchain_database {
     // UNIT TESTS
     // ========================================================================
 
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[ink::test]
+        fn new_initializes_correctly() {
+            let contract = DatabaseIntegration::new();
+            assert_eq!(contract.total_syncs(), 0);
+            assert_eq!(contract.latest_snapshot_id(), 0);
+        }
+
+        #[ink::test]
+        fn emit_sync_event_works() {
+            let mut contract = DatabaseIntegration::new();
+            let result = contract.emit_sync_event(DataType::Properties, Hash::from([0x01; 32]), 10);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), 1);
+            assert_eq!(contract.total_syncs(), 1);
+
+            let record = contract.get_sync_record(1).unwrap();
+            assert_eq!(record.data_type, DataType::Properties);
+            assert_eq!(record.record_count, 10);
+            assert_eq!(record.status, SyncStatus::Initiated);
+        }
+
+        #[ink::test]
+        fn analytics_snapshot_works() {
+            let mut contract = DatabaseIntegration::new();
+            let result = contract.record_analytics_snapshot(
+                100,
+                50,
+                20,
+                10_000_000,
+                100_000,
+                30,
+                Hash::from([0x02; 32]),
+            );
+            assert!(result.is_ok());
+
+            let snapshot = contract.get_analytics_snapshot(1).unwrap();
+            assert_eq!(snapshot.total_properties, 100);
+            assert_eq!(snapshot.total_valuation, 10_000_000);
+        }
+
+        #[ink::test]
+        fn data_export_works() {
+            let mut contract = DatabaseIntegration::new();
+            let result = contract.request_data_export(DataType::Properties, 1, 100, 0, 1000);
+            assert!(result.is_ok());
+
+            let batch_id = result.unwrap();
+            let request = contract.get_export_request(batch_id).unwrap();
+            assert!(!request.completed);
+
+            let complete_result = contract.complete_data_export(batch_id, Hash::from([0x03; 32]));
+            assert!(complete_result.is_ok());
+
     // Unit tests extracted to tests.rs (Issue #101)
     include!("tests.rs");
 }
