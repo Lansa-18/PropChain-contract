@@ -15,165 +15,8 @@ use scale_info::prelude::vec::Vec;
 mod property_token {
     use super::*;
 
-    /// Error types for the property token contract
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub enum Error {
-        // Standard ERC errors
-        /// Token does not exist
-        TokenNotFound,
-        /// Caller is not authorized
-        Unauthorized,
-        // Property-specific errors
-        /// Property does not exist
-        PropertyNotFound,
-        /// Metadata is invalid or malformed
-        InvalidMetadata,
-        /// Document does not exist
-        DocumentNotFound,
-        /// Compliance check failed
-        ComplianceFailed,
-        // Cross-chain bridge errors
-        /// Bridge functionality not supported
-        BridgeNotSupported,
-        /// Invalid chain ID
-        InvalidChain,
-        /// Token is locked in bridge
-        BridgeLocked,
-        /// Insufficient signatures for bridge operation
-        InsufficientSignatures,
-        /// Bridge request has expired
-        RequestExpired,
-        /// Invalid bridge request
-        InvalidRequest,
-        /// Bridge operations are paused
-        BridgePaused,
-        /// Gas limit exceeded
-        GasLimitExceeded,
-        /// Metadata is corrupted
-        MetadataCorruption,
-        /// Invalid bridge operator
-        InvalidBridgeOperator,
-        /// Duplicate bridge request
-        DuplicateBridgeRequest,
-        /// Bridge operation timed out
-        BridgeTimeout,
-        /// Already signed this request
-        AlreadySigned,
-        /// Insufficient balance
-        InsufficientBalance,
-        /// Invalid amount
-        InvalidAmount,
-        /// Proposal not found
-        ProposalNotFound,
-        /// Proposal is closed
-        ProposalClosed,
-        /// Ask not found
-        AskNotFound,
-    }
-
-    impl core::fmt::Display for Error {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            match self {
-                Error::TokenNotFound => write!(f, "Token does not exist"),
-                Error::Unauthorized => write!(f, "Caller is not authorized"),
-                Error::PropertyNotFound => write!(f, "Property does not exist"),
-                Error::InvalidMetadata => write!(f, "Metadata is invalid or malformed"),
-                Error::DocumentNotFound => write!(f, "Document does not exist"),
-                Error::ComplianceFailed => write!(f, "Compliance check failed"),
-                Error::BridgeNotSupported => write!(f, "Bridge functionality not supported"),
-                Error::InvalidChain => write!(f, "Invalid chain ID"),
-                Error::BridgeLocked => write!(f, "Token is locked in bridge"),
-                Error::InsufficientSignatures => {
-                    write!(f, "Insufficient signatures for bridge operation")
-                }
-                Error::RequestExpired => write!(f, "Bridge request has expired"),
-                Error::InvalidRequest => write!(f, "Invalid bridge request"),
-                Error::BridgePaused => write!(f, "Bridge operations are paused"),
-                Error::GasLimitExceeded => write!(f, "Gas limit exceeded"),
-                Error::MetadataCorruption => write!(f, "Metadata is corrupted"),
-                Error::InvalidBridgeOperator => write!(f, "Invalid bridge operator"),
-                Error::DuplicateBridgeRequest => write!(f, "Duplicate bridge request"),
-                Error::BridgeTimeout => write!(f, "Bridge operation timed out"),
-                Error::AlreadySigned => write!(f, "Already signed this request"),
-                Error::InsufficientBalance => write!(f, "Insufficient balance"),
-                Error::InvalidAmount => write!(f, "Invalid amount"),
-                Error::ProposalNotFound => write!(f, "Proposal not found"),
-                Error::ProposalClosed => write!(f, "Proposal is closed"),
-                Error::AskNotFound => write!(f, "Ask not found"),
-            }
-        }
-    }
-
-    impl ContractError for Error {
-        fn error_code(&self) -> u32 {
-            match self {
-                Error::TokenNotFound => property_token_codes::TOKEN_NOT_FOUND,
-                Error::Unauthorized => property_token_codes::UNAUTHORIZED_TRANSFER,
-                Error::PropertyNotFound => property_token_codes::PROPERTY_NOT_FOUND,
-                Error::InvalidMetadata => property_token_codes::INVALID_METADATA,
-                Error::DocumentNotFound => property_token_codes::DOCUMENT_NOT_FOUND,
-                Error::ComplianceFailed => property_token_codes::COMPLIANCE_FAILED,
-                Error::BridgeNotSupported => property_token_codes::BRIDGE_NOT_SUPPORTED,
-                Error::InvalidChain => property_token_codes::INVALID_CHAIN,
-                Error::BridgeLocked => property_token_codes::BRIDGE_LOCKED,
-                Error::InsufficientSignatures => property_token_codes::INSUFFICIENT_SIGNATURES,
-                Error::RequestExpired => property_token_codes::REQUEST_EXPIRED,
-                Error::InvalidRequest => property_token_codes::INVALID_REQUEST,
-                Error::BridgePaused => property_token_codes::BRIDGE_PAUSED,
-                Error::GasLimitExceeded => property_token_codes::GAS_LIMIT_EXCEEDED,
-                Error::MetadataCorruption => property_token_codes::METADATA_CORRUPTION,
-                Error::InvalidBridgeOperator => property_token_codes::INVALID_BRIDGE_OPERATOR,
-                Error::DuplicateBridgeRequest => property_token_codes::DUPLICATE_BRIDGE_REQUEST,
-                Error::BridgeTimeout => property_token_codes::BRIDGE_TIMEOUT,
-                Error::AlreadySigned => property_token_codes::ALREADY_SIGNED,
-                Error::InsufficientBalance => property_token_codes::INSUFFICIENT_BALANCE,
-                Error::InvalidAmount => property_token_codes::INVALID_AMOUNT,
-                Error::ProposalNotFound => property_token_codes::PROPOSAL_NOT_FOUND,
-                Error::ProposalClosed => property_token_codes::PROPOSAL_CLOSED,
-                Error::AskNotFound => property_token_codes::ASK_NOT_FOUND,
-            }
-        }
-
-        fn error_description(&self) -> &'static str {
-            match self {
-                Error::TokenNotFound => "The specified token does not exist",
-                Error::Unauthorized => "Caller does not have permission to perform this operation",
-                Error::PropertyNotFound => "The specified property does not exist",
-                Error::InvalidMetadata => "The provided metadata is invalid or malformed",
-                Error::DocumentNotFound => "The requested document does not exist",
-                Error::ComplianceFailed => "The operation failed compliance verification",
-                Error::BridgeNotSupported => "Cross-chain bridging is not supported for this token",
-                Error::InvalidChain => "The destination chain ID is invalid",
-                Error::BridgeLocked => "The token is currently locked in a bridge operation",
-                Error::InsufficientSignatures => {
-                    "Not enough signatures collected for bridge operation"
-                }
-                Error::RequestExpired => {
-                    "The bridge request has expired and can no longer be executed"
-                }
-                Error::InvalidRequest => "The bridge request is invalid or malformed",
-                Error::BridgePaused => "Bridge operations are temporarily paused",
-                Error::GasLimitExceeded => "The operation exceeded the gas limit",
-                Error::MetadataCorruption => "The token metadata has been corrupted",
-                Error::InvalidBridgeOperator => "The bridge operator is not authorized",
-                Error::DuplicateBridgeRequest => {
-                    "A bridge request with these parameters already exists"
-                }
-                Error::BridgeTimeout => "The bridge operation timed out",
-                Error::AlreadySigned => "You have already signed this bridge request",
-                Error::InsufficientBalance => "Account has insufficient balance",
-                Error::InvalidAmount => "The amount is invalid or out of range",
-                Error::ProposalNotFound => "The governance proposal does not exist",
-                Error::ProposalClosed => "The governance proposal is closed for voting",
-                Error::AskNotFound => "The sell ask does not exist",
-            }
-        }
-
-        fn error_category(&self) -> ErrorCategory {
-            ErrorCategory::PropertyToken
-        }
-    }
+    // Error types extracted to errors.rs (Issue #101)
+    include!("errors.rs");
 
     /// Property Token contract that maintains compatibility with ERC-721 and ERC-1155
     /// while adding real estate-specific features and cross-chain support
@@ -230,169 +73,19 @@ mod property_token {
         last_trade_price: Mapping<TokenId, u128>,
         compliance_registry: Option<AccountId>,
         tax_records: Mapping<(AccountId, TokenId), TaxRecord>,
+        max_batch_size: u32,
         /// Optional property-management contract for operational workflows
         property_management_contract: Option<AccountId>,
         /// On-chain management agent per property token (tokenized property)
         management_agent: Mapping<TokenId, AccountId>,
     }
 
-    /// Token ID type alias
-    pub type TokenId = u64;
+    // Data types extracted to types.rs (Issue #101)
+    include!("types.rs");
 
-    /// Chain ID type alias
-    pub type ChainId = u64;
+    // Events organized by domain (Issue #101 - see events.rs for reference copy)
 
-    /// Ownership transfer record
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct OwnershipTransfer {
-        pub from: AccountId,
-        pub to: AccountId,
-        pub timestamp: u64,
-        pub transaction_hash: Hash,
-    }
-
-    /// Compliance information
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct ComplianceInfo {
-        pub verified: bool,
-        pub verification_date: u64,
-        pub verifier: AccountId,
-        pub compliance_type: String,
-    }
-
-    /// Legal document information
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct DocumentInfo {
-        pub document_hash: Hash,
-        pub document_type: String,
-        pub upload_date: u64,
-        pub uploader: AccountId,
-    }
-
-    /// Bridged token information
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct BridgedTokenInfo {
-        pub original_chain: ChainId,
-        pub original_token_id: TokenId,
-        pub destination_chain: ChainId,
-        pub destination_token_id: TokenId,
-        pub bridged_at: u64,
-        pub status: BridgingStatus,
-    }
-
-    /// Bridging status enum
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub enum BridgingStatus {
-        Locked,
-        Pending,
-        InTransit,
-        Completed,
-        Failed,
-        Recovering,
-        Expired,
-    }
-
-    /// Error log entry for monitoring and debugging
-    #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct ErrorLogEntry {
-        pub error_code: String,
-        pub message: String,
-        pub account: AccountId,
-        pub timestamp: u64,
-        pub context: Vec<(String, String)>,
-    }
-
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
-        ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct Proposal {
-        pub id: u64,
-        pub token_id: TokenId,
-        pub description_hash: Hash,
-        pub quorum: u128,
-        pub for_votes: u128,
-        pub against_votes: u128,
-        pub status: ProposalStatus,
-        pub created_at: u64,
-    }
-
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
-        ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub enum ProposalStatus {
-        Open,
-        Executed,
-        Rejected,
-        Closed,
-    }
-
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
-        ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct Ask {
-        pub token_id: TokenId,
-        pub seller: AccountId,
-        pub price_per_share: u128,
-        pub amount: u128,
-        pub created_at: u64,
-    }
-
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
-        ink::storage::traits::StorageLayout,
-    )]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct TaxRecord {
-        pub dividends_received: u128,
-        pub shares_sold: u128,
-        pub proceeds: u128,
-    }
-
-    // Events for tracking property token operations
+    // --- ERC-721/1155 Standard Events ---
     #[ink(event)]
     pub struct Transfer {
         #[ink(topic)]
@@ -422,6 +115,7 @@ mod property_token {
         pub approved: bool,
     }
 
+    // --- Property Events ---
     #[ink(event)]
     pub struct PropertyTokenMinted {
         #[ink(topic)]
@@ -452,6 +146,7 @@ mod property_token {
         pub verifier: AccountId,
     }
 
+    // --- Bridge Events ---
     #[ink(event)]
     pub struct TokenBridged {
         #[ink(topic)]
@@ -514,6 +209,7 @@ mod property_token {
         pub recovery_action: RecoveryAction,
     }
 
+    // --- Fractional / Dividend Events ---
     #[ink(event)]
     pub struct SharesIssued {
         #[ink(topic)]
@@ -549,6 +245,7 @@ mod property_token {
         pub amount: u128,
     }
 
+    // --- Governance Events ---
     #[ink(event)]
     pub struct ProposalCreated {
         #[ink(topic)]
@@ -579,6 +276,7 @@ mod property_token {
         pub passed: bool,
     }
 
+    // --- Marketplace Events ---
     #[ink(event)]
     pub struct AskPlaced {
         #[ink(topic)]
@@ -609,6 +307,7 @@ mod property_token {
         pub price_per_share: u128,
     }
 
+    // --- Management Events ---
     #[ink(event)]
     pub struct PropertyManagementContractSet {
         #[ink(topic)]
@@ -704,6 +403,7 @@ mod property_token {
                 last_trade_price: Mapping::default(),
                 compliance_registry: None,
                 tax_records: Mapping::default(),
+                max_batch_size: 50,
                 property_management_contract: None,
                 management_agent: Mapping::default(),
             }
@@ -865,6 +565,9 @@ mod property_token {
         /// ERC-1155: Returns the balance of tokens for an account
         #[ink(message)]
         pub fn balance_of_batch(&self, accounts: Vec<AccountId>, ids: Vec<TokenId>) -> Vec<u128> {
+            if accounts.len() > self.max_batch_size as usize {
+                return Vec::new();
+            }
             let mut balances = Vec::new();
             for i in 0..accounts.len() {
                 if i < ids.len() {
@@ -891,6 +594,10 @@ mod property_token {
 
             if from != caller && !self.is_approved_for_all(from, caller) {
                 return Err(Error::Unauthorized);
+            }
+
+            if ids.len() > self.max_batch_size as usize {
+                return Err(Error::BatchSizeExceeded);
             }
 
             // Verify lengths match
@@ -1724,6 +1431,9 @@ mod property_token {
             &mut self,
             metadata_list: Vec<PropertyMetadata>,
         ) -> Result<Vec<TokenId>, Error> {
+            if metadata_list.len() > self.max_batch_size as usize {
+                return Err(Error::BatchSizeExceeded);
+            }
             let caller = self.env().caller();
             let mut issued_tokens = Vec::new();
             let current_time = self.env().block_timestamp();
@@ -2700,429 +2410,6 @@ mod property_token {
         }
     }
 
-    // Unit tests for the PropertyToken contract
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use ink::env::{test, DefaultEnvironment};
-
-        fn setup_contract() -> PropertyToken {
-            PropertyToken::new()
-        }
-
-        #[ink::test]
-        fn test_constructor_works() {
-            let contract = setup_contract();
-            assert_eq!(contract.total_supply(), 0);
-            assert_eq!(contract.current_token_id(), 0);
-        }
-
-        #[ink::test]
-        fn test_register_property_with_token() {
-            let mut contract = setup_contract();
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let result = contract.register_property_with_token(metadata.clone());
-            assert!(result.is_ok());
-
-            let token_id = result.expect("Token registration should succeed in test");
-            assert_eq!(token_id, 1);
-            assert_eq!(contract.total_supply(), 1);
-        }
-
-        #[ink::test]
-        fn test_balance_of() {
-            let mut contract = setup_contract();
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let _token_id = contract
-                .register_property_with_token(metadata)
-                .expect("Token registration should succeed in test");
-            let _caller = AccountId::from([1u8; 32]);
-
-            // Set up mock caller for the test
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            assert_eq!(contract.balance_of(accounts.alice), 1);
-        }
-
-        #[ink::test]
-        fn test_attach_legal_document() {
-            let mut contract = setup_contract();
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let token_id = contract
-                .register_property_with_token(metadata)
-                .expect("Token registration should succeed in test");
-
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let doc_hash = Hash::from([1u8; 32]);
-            let doc_type = String::from("Deed");
-
-            let result = contract.attach_legal_document(token_id, doc_hash, doc_type);
-            assert!(result.is_ok());
-        }
-
-        #[ink::test]
-        fn test_verify_compliance() {
-            let mut contract = setup_contract();
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let token_id = contract
-                .register_property_with_token(metadata)
-                .expect("Token registration should succeed in test");
-
-            let _accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(contract.admin());
-
-            let result = contract.verify_compliance(token_id, true);
-            assert!(result.is_ok());
-
-            let compliance_info = contract
-                .compliance_flags
-                .get(&token_id)
-                .expect("Compliance info should exist after verification");
-            assert!(compliance_info.verified);
-        }
-
-        // ============================================================================
-        // EDGE CASE TESTS
-        // ============================================================================
-
-        #[ink::test]
-        fn test_transfer_from_nonexistent_token() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-
-            let result = contract.transfer_from(accounts.alice, accounts.bob, 999);
-            assert_eq!(result, Err(Error::TokenNotFound));
-        }
-
-        #[ink::test]
-        fn test_transfer_from_unauthorized_caller() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let token_id = contract
-                .register_property_with_token(metadata)
-                .expect("Token registration should succeed in test");
-
-            // Bob tries to transfer Alice's token without approval
-            test::set_caller::<DefaultEnvironment>(accounts.bob);
-            let result = contract.transfer_from(accounts.alice, accounts.bob, token_id);
-            assert_eq!(result, Err(Error::Unauthorized));
-        }
-
-        #[ink::test]
-        fn test_approve_nonexistent_token() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-
-            let result = contract.approve(accounts.bob, 999);
-            assert_eq!(result, Err(Error::TokenNotFound));
-        }
-
-        #[ink::test]
-        fn test_approve_unauthorized_caller() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let token_id = contract
-                .register_property_with_token(metadata)
-                .expect("Token registration should succeed in test");
-
-            // Bob tries to approve without being owner or operator
-            test::set_caller::<DefaultEnvironment>(accounts.bob);
-            let result = contract.approve(accounts.charlie, token_id);
-            assert_eq!(result, Err(Error::Unauthorized));
-        }
-
-        #[ink::test]
-        fn test_owner_of_nonexistent_token() {
-            let contract = setup_contract();
-
-            assert_eq!(contract.owner_of(0), None);
-            assert_eq!(contract.owner_of(1), None);
-            assert_eq!(contract.owner_of(u64::MAX), None);
-        }
-
-        #[ink::test]
-        fn test_balance_of_nonexistent_account() {
-            let contract = setup_contract();
-            let nonexistent = AccountId::from([0xFF; 32]);
-
-            assert_eq!(contract.balance_of(nonexistent), 0);
-        }
-
-        #[ink::test]
-        fn test_attach_document_to_nonexistent_token() {
-            let mut contract = setup_contract();
-            let doc_hash = Hash::from([1u8; 32]);
-
-            let result = contract.attach_legal_document(999, doc_hash, "Deed".to_string());
-            assert_eq!(result, Err(Error::TokenNotFound));
-        }
-
-        #[ink::test]
-        fn test_attach_document_unauthorized() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let token_id = contract
-                .register_property_with_token(metadata)
-                .expect("Token registration should succeed in test");
-
-            // Bob tries to attach document
-            test::set_caller::<DefaultEnvironment>(accounts.bob);
-            let doc_hash = Hash::from([1u8; 32]);
-            let result = contract.attach_legal_document(token_id, doc_hash, "Deed".to_string());
-            assert_eq!(result, Err(Error::Unauthorized));
-        }
-
-        #[ink::test]
-        fn test_verify_compliance_nonexistent_token() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let result = contract.verify_compliance(999, true);
-            assert_eq!(result, Err(Error::TokenNotFound));
-        }
-
-        #[ink::test]
-        fn test_initiate_bridge_invalid_chain() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let token_id = contract
-                .register_property_with_token(metadata)
-                .expect("Token registration should succeed in test");
-
-            // Try to bridge to unsupported chain
-            let result = contract.initiate_bridge_multisig(
-                token_id,
-                999, // Invalid chain ID
-                accounts.bob,
-                2,    // required_signatures
-                None, // timeout_blocks
-            );
-
-            assert_eq!(result, Err(Error::InvalidChain));
-        }
-
-        #[ink::test]
-        fn test_initiate_bridge_nonexistent_token() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-
-            let result = contract.initiate_bridge_multisig(
-                999,          // nonexistent token_id
-                2,            // destination_chain
-                accounts.bob, // recipient
-                2,            // required_signatures
-                None,         // timeout_blocks
-            );
-
-            assert_eq!(result, Err(Error::TokenNotFound));
-        }
-
-        #[ink::test]
-        fn test_sign_bridge_request_nonexistent() {
-            let mut contract = setup_contract();
-            let _accounts = test::default_accounts::<DefaultEnvironment>();
-
-            let result = contract.sign_bridge_request(999, true);
-            assert_eq!(result, Err(Error::InvalidRequest));
-        }
-
-        #[ink::test]
-        fn test_register_multiple_properties_increments_ids() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            for i in 1..=10 {
-                let metadata = PropertyMetadata {
-                    location: format!("Property {}", i),
-                    size: 1000 + i,
-                    legal_description: format!("Description {}", i),
-                    valuation: 100_000 + (i as u128 * 1000),
-                    documents_url: format!("ipfs://prop{}", i),
-                };
-
-                let token_id = contract
-                    .register_property_with_token(metadata)
-                    .expect("Token registration should succeed in test");
-                assert_eq!(token_id, i);
-                assert_eq!(contract.total_supply(), i);
-            }
-        }
-
-        #[ink::test]
-        fn test_transfer_preserves_total_supply() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-
-            let token_id = contract
-                .register_property_with_token(metadata)
-                .expect("Token registration should succeed in test");
-
-            let initial_supply = contract.total_supply();
-
-            contract
-                .transfer_from(accounts.alice, accounts.bob, token_id)
-                .expect("Transfer should succeed");
-
-            // Total supply should remain constant
-            assert_eq!(contract.total_supply(), initial_supply);
-        }
-
-        #[ink::test]
-        fn test_balance_of_batch_empty_vectors() {
-            let contract = setup_contract();
-
-            let result = contract.balance_of_batch(Vec::new(), Vec::new());
-            assert_eq!(result, Vec::<u128>::new());
-        }
-
-        #[ink::test]
-        fn test_get_error_count_nonexistent() {
-            let contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-
-            let count = contract.get_error_count(accounts.alice, "NONEXISTENT".to_string());
-            assert_eq!(count, 0);
-        }
-
-        #[ink::test]
-        fn test_get_error_rate_nonexistent() {
-            let contract = setup_contract();
-
-            let rate = contract.get_error_rate("NONEXISTENT".to_string());
-            assert_eq!(rate, 0);
-        }
-
-        #[ink::test]
-        fn test_get_recent_errors_unauthorized() {
-            let contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-
-            // Non-admin tries to get errors
-            test::set_caller::<DefaultEnvironment>(accounts.bob);
-            let errors = contract.get_recent_errors(10);
-            assert_eq!(errors, Vec::new());
-        }
-
-        #[ink::test]
-        fn test_property_management_linkage() {
-            let mut contract = setup_contract();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let metadata = PropertyMetadata {
-                location: String::from("123 Main St"),
-                size: 1000,
-                legal_description: String::from("Sample property"),
-                valuation: 500000,
-                documents_url: String::from("ipfs://sample-docs"),
-            };
-            let token_id = contract
-                .register_property_with_token(metadata)
-                .expect("register");
-
-            test::set_caller::<DefaultEnvironment>(contract.admin());
-            contract
-                .set_property_management_contract(Some(accounts.charlie))
-                .expect("set pm contract");
-            assert_eq!(
-                contract.get_property_management_contract(),
-                Some(accounts.charlie)
-            );
-
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-            contract
-                .assign_management_agent(token_id, accounts.bob)
-                .expect("agent");
-            assert_eq!(contract.get_management_agent(token_id), Some(accounts.bob));
-
-            contract.clear_management_agent(token_id).expect("clear");
-            assert_eq!(contract.get_management_agent(token_id), None);
-        }
-    }
+    // Unit tests extracted to tests.rs (Issue #101)
+    include!("tests.rs");
 }

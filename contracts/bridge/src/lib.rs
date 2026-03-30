@@ -11,98 +11,7 @@ use scale_info::prelude::vec::Vec;
 mod bridge {
     use super::*;
 
-    /// Error types for the bridge contract
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub enum Error {
-        /// Caller is not authorized
-        Unauthorized,
-        /// Token does not exist
-        TokenNotFound,
-        /// Invalid chain ID
-        InvalidChain,
-        /// Bridge not supported for this token
-        BridgeNotSupported,
-        /// Insufficient signatures collected
-        InsufficientSignatures,
-        /// Bridge request has expired
-        RequestExpired,
-        /// Already signed this request
-        AlreadySigned,
-        /// Invalid bridge request
-        InvalidRequest,
-        /// Bridge operations are paused
-        BridgePaused,
-        /// Invalid metadata
-        InvalidMetadata,
-        /// Duplicate bridge request
-        DuplicateRequest,
-        /// Gas limit exceeded
-        GasLimitExceeded,
-    }
-
-    impl core::fmt::Display for Error {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            match self {
-                Error::Unauthorized => write!(f, "Caller is not authorized"),
-                Error::TokenNotFound => write!(f, "Token does not exist"),
-                Error::InvalidChain => write!(f, "Invalid chain ID"),
-                Error::BridgeNotSupported => write!(f, "Bridge not supported for this token"),
-                Error::InsufficientSignatures => write!(f, "Insufficient signatures collected"),
-                Error::RequestExpired => write!(f, "Bridge request has expired"),
-                Error::AlreadySigned => write!(f, "Already signed this request"),
-                Error::InvalidRequest => write!(f, "Invalid bridge request"),
-                Error::BridgePaused => write!(f, "Bridge operations are paused"),
-                Error::InvalidMetadata => write!(f, "Invalid metadata"),
-                Error::DuplicateRequest => write!(f, "Duplicate bridge request"),
-                Error::GasLimitExceeded => write!(f, "Gas limit exceeded"),
-            }
-        }
-    }
-
-    impl ContractError for Error {
-        fn error_code(&self) -> u32 {
-            match self {
-                Error::Unauthorized => bridge_codes::BRIDGE_UNAUTHORIZED,
-                Error::TokenNotFound => bridge_codes::BRIDGE_TOKEN_NOT_FOUND,
-                Error::InvalidChain => bridge_codes::BRIDGE_INVALID_CHAIN,
-                Error::BridgeNotSupported => bridge_codes::BRIDGE_NOT_SUPPORTED,
-                Error::InsufficientSignatures => bridge_codes::BRIDGE_INSUFFICIENT_SIGNATURES,
-                Error::RequestExpired => bridge_codes::BRIDGE_REQUEST_EXPIRED,
-                Error::AlreadySigned => bridge_codes::BRIDGE_ALREADY_SIGNED,
-                Error::InvalidRequest => bridge_codes::BRIDGE_INVALID_REQUEST,
-                Error::BridgePaused => bridge_codes::BRIDGE_PAUSED,
-                Error::InvalidMetadata => bridge_codes::BRIDGE_INVALID_METADATA,
-                Error::DuplicateRequest => bridge_codes::BRIDGE_DUPLICATE_REQUEST,
-                Error::GasLimitExceeded => bridge_codes::BRIDGE_GAS_LIMIT_EXCEEDED,
-            }
-        }
-
-        fn error_description(&self) -> &'static str {
-            match self {
-                Error::Unauthorized => "Caller does not have permission to perform this operation",
-                Error::TokenNotFound => "The specified token does not exist",
-                Error::InvalidChain => "The destination chain ID is invalid",
-                Error::BridgeNotSupported => "Cross-chain bridging is not supported for this token",
-                Error::InsufficientSignatures => {
-                    "Not enough signatures collected for bridge operation"
-                }
-                Error::RequestExpired => {
-                    "The bridge request has expired and can no longer be executed"
-                }
-                Error::AlreadySigned => "You have already signed this bridge request",
-                Error::InvalidRequest => "The bridge request is invalid or malformed",
-                Error::BridgePaused => "Bridge operations are temporarily paused",
-                Error::InvalidMetadata => "The token metadata is invalid",
-                Error::DuplicateRequest => "A bridge request with these parameters already exists",
-                Error::GasLimitExceeded => "The operation exceeded the gas limit",
-            }
-        }
-
-        fn error_category(&self) -> ErrorCategory {
-            ErrorCategory::Bridge
-        }
-    }
+    include!("errors.rs");
 
     /// Bridge contract for cross-chain property token transfers
     #[ink(storage)]
@@ -122,6 +31,9 @@ mod bridge {
         /// Transaction verification records
         verified_transactions: Mapping<Hash, bool>,
 
+        /// Cross-chain DEX settlement intents tracked by the bridge
+        cross_chain_trades: Mapping<u64, CrossChainTradeIntent>,
+
         /// Bridge operators
         bridge_operators: Vec<AccountId>,
 
@@ -130,6 +42,9 @@ mod bridge {
 
         /// Transaction counter
         transaction_counter: u64,
+
+        /// Cross-chain trade settlement counter
+        cross_chain_trade_counter: u64,
 
         /// Admin account
         admin: AccountId,
@@ -215,9 +130,11 @@ mod bridge {
                 bridge_history: Mapping::default(),
                 chain_info: Mapping::default(),
                 verified_transactions: Mapping::default(),
+                cross_chain_trades: Mapping::default(),
                 bridge_operators: vec![caller],
                 request_counter: 0,
                 transaction_counter: 0,
+                cross_chain_trade_counter: 0,
                 admin: caller,
             };
 
@@ -533,6 +450,106 @@ mod bridge {
             self.bridge_history.get(account).unwrap_or_default()
         }
 
+        /// Quotes bridge fees for a DEX settlement.
+        #[ink(message)]
+        pub fn quote_cross_chain_trade(
+            &self,
+            destination_chain: ChainId,
+            amount_in: u128,
+        ) -> Result<BridgeFeeQuote, Error> {
+            let gas_estimate = self.estimate_bridge_gas(0, destination_chain)?;
+            let protocol_fee = amount_in / 200;
+            Ok(BridgeFeeQuote {
+                destination_chain,
+                gas_estimate,
+                protocol_fee,
+                total_fee: protocol_fee.saturating_add(gas_estimate as u128),
+            })
+        }
+
+        /// Registers a cross-chain DEX trade intent on the bridge.
+        #[ink(message)]
+        pub fn register_cross_chain_trade(
+            &mut self,
+            pair_id: u64,
+            order_id: Option<u64>,
+            destination_chain: ChainId,
+            recipient: AccountId,
+            amount_in: u128,
+            min_amount_out: u128,
+        ) -> Result<u64, Error> {
+            if self.config.emergency_pause {
+                return Err(Error::BridgePaused);
+            }
+            if !self.config.supported_chains.contains(&destination_chain) {
+                return Err(Error::InvalidChain);
+            }
+
+            self.cross_chain_trade_counter += 1;
+            let trade_id = self.cross_chain_trade_counter;
+            let quote = self.quote_cross_chain_trade(destination_chain, amount_in)?;
+            let intent = CrossChainTradeIntent {
+                trade_id,
+                pair_id,
+                order_id,
+                source_chain: self.get_current_chain_id(),
+                destination_chain,
+                trader: self.env().caller(),
+                recipient,
+                amount_in,
+                min_amount_out,
+                bridge_request_id: None,
+                bridge_fee_quote: quote,
+                status: CrossChainTradeStatus::Pending,
+                created_at: self.env().block_timestamp(),
+            };
+            self.cross_chain_trades.insert(trade_id, &intent);
+            Ok(trade_id)
+        }
+
+        /// Attaches a bridge request to a pending cross-chain trade.
+        #[ink(message)]
+        pub fn attach_bridge_request_to_trade(
+            &mut self,
+            trade_id: u64,
+            bridge_request_id: u64,
+        ) -> Result<(), Error> {
+            let caller = self.env().caller();
+            let mut trade = self
+                .cross_chain_trades
+                .get(trade_id)
+                .ok_or(Error::InvalidRequest)?;
+            if caller != trade.trader && caller != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            trade.bridge_request_id = Some(bridge_request_id);
+            trade.status = CrossChainTradeStatus::BridgeRequested;
+            self.cross_chain_trades.insert(trade_id, &trade);
+            Ok(())
+        }
+
+        /// Marks a cross-chain trade settlement as complete.
+        #[ink(message)]
+        pub fn settle_cross_chain_trade(&mut self, trade_id: u64) -> Result<(), Error> {
+            let caller = self.env().caller();
+            if caller != self.admin && !self.bridge_operators.contains(&caller) {
+                return Err(Error::Unauthorized);
+            }
+            let mut trade = self
+                .cross_chain_trades
+                .get(trade_id)
+                .ok_or(Error::InvalidRequest)?;
+            trade.status = CrossChainTradeStatus::Settled;
+            self.cross_chain_trades.insert(trade_id, &trade);
+            Ok(())
+        }
+
+        /// Gets a cross-chain trade settlement intent.
+        #[ink(message)]
+        pub fn get_cross_chain_trade(&self, trade_id: u64) -> Option<CrossChainTradeIntent> {
+            self.cross_chain_trades.get(trade_id)
+        }
+
         /// Adds a bridge operator
         #[ink(message)]
         pub fn add_bridge_operator(&mut self, operator: AccountId) -> Result<(), Error> {
@@ -666,67 +683,5 @@ mod bridge {
         }
     }
 
-    // Unit tests
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use ink::env::{test, DefaultEnvironment};
-
-        fn setup_bridge() -> PropertyBridge {
-            let supported_chains = vec![1, 2, 3];
-            PropertyBridge::new(supported_chains, 2, 5, 100, 500000)
-        }
-
-        #[ink::test]
-        fn test_constructor_works() {
-            let bridge = setup_bridge();
-            let config = bridge.get_config();
-            assert_eq!(config.min_signatures_required, 2);
-            assert_eq!(config.max_signatures_required, 5);
-        }
-
-        #[ink::test]
-        fn test_initiate_bridge_multisig() {
-            let mut bridge = setup_bridge();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-
-            let metadata = PropertyMetadata {
-                location: String::from("Test Property"),
-                size: 1000,
-                legal_description: String::from("Test"),
-                valuation: 100000,
-                documents_url: String::from("ipfs://test"),
-            };
-
-            let result = bridge.initiate_bridge_multisig(1, 2, accounts.bob, 2, Some(50), metadata);
-            assert!(result.is_ok());
-        }
-
-        #[ink::test]
-        fn test_sign_bridge_request() {
-            let mut bridge = setup_bridge();
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-
-            // First create a request
-            test::set_caller::<DefaultEnvironment>(accounts.alice);
-            let metadata = PropertyMetadata {
-                location: String::from("Test Property"),
-                size: 1000,
-                legal_description: String::from("Test"),
-                valuation: 100000,
-                documents_url: String::from("ipfs://test"),
-            };
-
-            let request_id = bridge
-                .initiate_bridge_multisig(1, 2, accounts.bob, 2, Some(50), metadata)
-                .expect("Bridge initiation should succeed in test");
-
-            // Now sign it as a bridge operator
-            let accounts = test::default_accounts::<DefaultEnvironment>();
-            test::set_caller::<DefaultEnvironment>(accounts.alice); // Use default admin account
-            let result = bridge.sign_bridge_request(request_id, true);
-            assert!(result.is_ok());
-        }
-    }
+    include!("tests.rs");
 }

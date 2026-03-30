@@ -1,0 +1,726 @@
+/**
+ * @propchain/sdk — PropertyRegistry Client
+ *
+ * Typed wrapper for the PropChain PropertyRegistry smart contract.
+ * Provides ergonomic, strongly-typed methods for all on-chain operations
+ * including property management, escrow, badges, pause control, and batch ops.
+ *
+ * @module client/PropertyRegistryClient
+ */
+
+import type { ApiPromise } from '@polkadot/api';
+import { ContractPromise } from '@polkadot/api-contract';
+import { Abi } from '@polkadot/api-contract';
+import type { KeyringPair } from '@polkadot/keyring/types';
+
+import type {
+  PropertyMetadata,
+  PropertyInfo,
+  EscrowInfo,
+  HealthStatus,
+  GlobalAnalytics,
+  GasMetrics,
+  Badge,
+  BadgeType,
+  VerificationRequest,
+  Appeal,
+  PauseInfo,
+  TxResult,
+  GasEstimation,
+  ContractEvent,
+  Subscription,
+  BatchResult,
+  BatchConfig,
+  BatchOperationStats,
+  PortfolioSummary,
+  PortfolioDetails,
+  FractionalInfo,
+  FeeOperation,
+} from '../types';
+import { PropChainError, TransactionError, decodeContractError } from '../utils/errors';
+import { decodeTransactionEvents, subscribeToNamedEvent } from '../utils/events';
+import type { PropChainEventName, PropChainEventMap } from '../types/events';
+
+/**
+ * Signer type: either a KeyringPair or an address string (with external signer).
+ */
+export type Signer = KeyringPair | string;
+
+// ============================================================================
+// PropertyRegistryClient
+// ============================================================================
+
+/**
+ * Client for interacting with the PropChain PropertyRegistry contract.
+ *
+ * Provides high-level, typed methods for all contract operations,
+ * abstracting away gas estimation, result decoding, and event handling.
+ *
+ * @example
+ * ```typescript
+ * import { PropChainClient } from '@propchain/sdk';
+ *
+ * const client = await PropChainClient.create('ws://localhost:9944', {
+ *   propertyRegistry: '5Grw...',
+ * });
+ *
+ * // Register a property
+ * const result = await client.propertyRegistry.registerProperty(signer, {
+ *   location: '123 Main St',
+ *   size: 2000,
+ *   legalDescription: 'Lot 1 Block 2',
+ *   valuation: BigInt(500000_00000000),
+ *   documentsUrl: 'ipfs://Qm...',
+ * });
+ *
+ * console.log('Property ID:', result.propertyId);
+ * ```
+ */
+export class PropertyRegistryClient {
+  private readonly contract: ContractPromise;
+  private readonly api: ApiPromise;
+  private readonly abi: Abi;
+  private readonly contractAddress: string;
+
+  constructor(api: ApiPromise, contractAddress: string, abi: Abi) {
+    this.api = api;
+    this.abi = abi;
+    this.contractAddress = contractAddress;
+    this.contract = new ContractPromise(api, abi, contractAddress);
+  }
+
+  // ==========================================================================
+  // Property Registration & Query
+  // ==========================================================================
+
+  /**
+   * Registers a new property on-chain.
+   *
+   * @param signer - Account signing the transaction
+   * @param metadata - Property metadata
+   * @returns The new property ID and transaction result
+   */
+  async registerProperty(
+    signer: Signer,
+    metadata: PropertyMetadata,
+  ): Promise<{ propertyId: number } & TxResult> {
+    const encodedMetadata = this.encodePropertyMetadata(metadata);
+    const txResult = await this.submitTx(
+      signer,
+      'register_property',
+      [encodedMetadata],
+    );
+
+    // Extract property ID from events
+    const regEvents = txResult.events.filter((e) => e.name === 'PropertyRegistered');
+    const propertyId = regEvents.length > 0
+      ? (regEvents[0].args.propertyId as number)
+      : 0;
+
+    return { propertyId, ...txResult };
+  }
+
+  /**
+   * Queries a property by its ID.
+   *
+   * @param propertyId - The property ID to look up
+   * @returns The property information, or `null` if not found
+   */
+  async getProperty(propertyId: number): Promise<PropertyInfo | null> {
+    const result = await this.query('get_property', [propertyId]);
+    if (!result) return null;
+    return this.decodePropertyInfo(result);
+  }
+
+  /**
+   * Gets all property IDs owned by an account.
+   *
+   * @param owner - Owner account address
+   * @returns Array of property IDs
+   */
+  async getOwnerProperties(owner: string): Promise<number[]> {
+    const result = await this.query('get_owner_properties', [owner]);
+    return (result as number[]) ?? [];
+  }
+
+  /**
+   * Gets the total number of registered properties.
+   */
+  async getPropertyCount(): Promise<number> {
+    const result = await this.query('property_count', []);
+    return (result as number) ?? 0;
+  }
+
+  // ==========================================================================
+  // Property Transfers & Approvals
+  // ==========================================================================
+
+  /**
+   * Transfers property ownership to a new account.
+   *
+   * @param signer - Current owner or approved account
+   * @param propertyId - Property to transfer
+   * @param to - New owner address
+   */
+  async transferProperty(
+    signer: Signer,
+    propertyId: number,
+    to: string,
+  ): Promise<TxResult> {
+    return this.submitTx(signer, 'transfer_property', [propertyId, to]);
+  }
+
+  /**
+   * Updates the metadata of a registered property.
+   *
+   * @param signer - Property owner
+   * @param propertyId - Property to update
+   * @param metadata - New metadata
+   */
+  async updateMetadata(
+    signer: Signer,
+    propertyId: number,
+    metadata: PropertyMetadata,
+  ): Promise<TxResult> {
+    const encoded = this.encodePropertyMetadata(metadata);
+    return this.submitTx(signer, 'update_metadata', [propertyId, encoded]);
+  }
+
+  /**
+   * Approves an account to transfer a specific property.
+   *
+   * @param signer - Property owner
+   * @param propertyId - Property to approve
+   * @param to - Account to approve (or null to clear)
+   */
+  async approve(
+    signer: Signer,
+    propertyId: number,
+    to: string | null,
+  ): Promise<TxResult> {
+    return this.submitTx(signer, 'approve', [propertyId, to]);
+  }
+
+  /**
+   * Gets the approved account for a property.
+   *
+   * @param propertyId - Property ID
+   * @returns Approved account address, or `null`
+   */
+  async getApproved(propertyId: number): Promise<string | null> {
+    const result = await this.query('get_approved', [propertyId]);
+    return (result as string) ?? null;
+  }
+
+  // ==========================================================================
+  // Escrow Operations
+  // ==========================================================================
+
+  /**
+   * Creates a new escrow for a property transfer.
+   *
+   * @param signer - Buyer account
+   * @param propertyId - Property being escrowed
+   * @param buyer - Buyer address
+   * @param seller - Seller address
+   * @param amount - Escrow amount
+   */
+  async createEscrow(
+    signer: Signer,
+    propertyId: number,
+    buyer: string,
+    seller: string,
+    amount: bigint,
+  ): Promise<{ escrowId: number } & TxResult> {
+    const txResult = await this.submitTx(signer, 'create_escrow', [
+      propertyId,
+      buyer,
+      seller,
+      amount.toString(),
+    ]);
+
+    const escrowEvents = txResult.events.filter((e) => e.name === 'EscrowCreated');
+    const escrowId = escrowEvents.length > 0
+      ? (escrowEvents[0].args.escrowId as number)
+      : 0;
+
+    return { escrowId, ...txResult };
+  }
+
+  /**
+   * Releases an escrow, completing the property transfer.
+   *
+   * @param signer - Authorized account (seller or admin)
+   * @param escrowId - Escrow to release
+   */
+  async releaseEscrow(signer: Signer, escrowId: number): Promise<TxResult> {
+    return this.submitTx(signer, 'release_escrow', [escrowId]);
+  }
+
+  /**
+   * Refunds an escrow, returning funds to the buyer.
+   *
+   * @param signer - Authorized account
+   * @param escrowId - Escrow to refund
+   */
+  async refundEscrow(signer: Signer, escrowId: number): Promise<TxResult> {
+    return this.submitTx(signer, 'refund_escrow', [escrowId]);
+  }
+
+  /**
+   * Gets escrow information by ID.
+   *
+   * @param escrowId - Escrow ID
+   * @returns Escrow info or `null`
+   */
+  async getEscrow(escrowId: number): Promise<EscrowInfo | null> {
+    const result = await this.query('get_escrow', [escrowId]);
+    return result ? (result as unknown as EscrowInfo) : null;
+  }
+
+  // ==========================================================================
+  // Health & Analytics
+  // ==========================================================================
+
+  /**
+   * Gets the full health status of the contract.
+   */
+  async healthCheck(): Promise<HealthStatus> {
+    const result = await this.query('health_check', []);
+    return result as unknown as HealthStatus;
+  }
+
+  /**
+   * Simple liveness check.
+   */
+  async ping(): Promise<boolean> {
+    const result = await this.query('ping', []);
+    return result as boolean;
+  }
+
+  /**
+   * Checks if all critical dependencies are configured.
+   */
+  async dependenciesHealthy(): Promise<boolean> {
+    const result = await this.query('dependencies_healthy', []);
+    return result as boolean;
+  }
+
+  /**
+   * Gets the contract version.
+   */
+  async getVersion(): Promise<number> {
+    const result = await this.query('version', []);
+    return result as number;
+  }
+
+  /**
+   * Gets the admin account address.
+   */
+  async getAdmin(): Promise<string> {
+    const result = await this.query('admin', []);
+    return result as string;
+  }
+
+  /**
+   * Gets global analytics data.
+   */
+  async getGlobalAnalytics(): Promise<GlobalAnalytics> {
+    const result = await this.query('get_global_analytics', []);
+    return result as unknown as GlobalAnalytics;
+  }
+
+  /**
+   * Gets gas usage metrics.
+   */
+  async getGasMetrics(): Promise<GasMetrics> {
+    const result = await this.query('get_gas_metrics', []);
+    return result as unknown as GasMetrics;
+  }
+
+  /**
+   * Gets the portfolio summary for an owner.
+   */
+  async getPortfolioSummary(owner: string): Promise<PortfolioSummary> {
+    const result = await this.query('get_portfolio_summary', [owner]);
+    return result as unknown as PortfolioSummary;
+  }
+
+  /**
+   * Gets detailed portfolio information for an owner.
+   */
+  async getPortfolioDetails(owner: string): Promise<PortfolioDetails> {
+    const result = await this.query('get_portfolio_details', [owner]);
+    return result as unknown as PortfolioDetails;
+  }
+
+  // ==========================================================================
+  // Badge Operations
+  // ==========================================================================
+
+  /**
+   * Issues a verification badge to a property.
+   */
+  async issueBadge(
+    signer: Signer,
+    propertyId: number,
+    badgeType: BadgeType,
+    expiresAt: number | null,
+    metadataUrl: string,
+  ): Promise<TxResult> {
+    return this.submitTx(signer, 'issue_badge', [
+      propertyId,
+      badgeType,
+      expiresAt,
+      metadataUrl,
+    ]);
+  }
+
+  /**
+   * Revokes a badge from a property.
+   */
+  async revokeBadge(
+    signer: Signer,
+    propertyId: number,
+    badgeType: BadgeType,
+    reason: string,
+  ): Promise<TxResult> {
+    return this.submitTx(signer, 'revoke_badge', [propertyId, badgeType, reason]);
+  }
+
+  /**
+   * Gets badge information for a property.
+   */
+  async getBadge(propertyId: number, badgeType: BadgeType): Promise<Badge | null> {
+    const result = await this.query('get_badge', [propertyId, badgeType]);
+    return result ? (result as unknown as Badge) : null;
+  }
+
+  /**
+   * Requests verification for a badge.
+   */
+  async requestVerification(
+    signer: Signer,
+    propertyId: number,
+    badgeType: BadgeType,
+    evidenceUrl: string,
+  ): Promise<{ requestId: number } & TxResult> {
+    const txResult = await this.submitTx(signer, 'request_verification', [
+      propertyId,
+      badgeType,
+      evidenceUrl,
+    ]);
+    const events = txResult.events.filter((e) => e.name === 'VerificationRequested');
+    const requestId = events.length > 0 ? (events[0].args.requestId as number) : 0;
+    return { requestId, ...txResult };
+  }
+
+  // ==========================================================================
+  // Pause Control
+  // ==========================================================================
+
+  /**
+   * Pauses the contract (admin/guardian only).
+   */
+  async pauseContract(
+    signer: Signer,
+    reason: string,
+    autoResumeAt: number | null,
+  ): Promise<TxResult> {
+    return this.submitTx(signer, 'pause_contract', [reason, autoResumeAt]);
+  }
+
+  /**
+   * Requests resuming the contract.
+   */
+  async requestResume(signer: Signer): Promise<TxResult> {
+    return this.submitTx(signer, 'request_resume', []);
+  }
+
+  /**
+   * Approves a resume request.
+   */
+  async approveResume(signer: Signer): Promise<TxResult> {
+    return this.submitTx(signer, 'approve_resume', []);
+  }
+
+  /**
+   * Gets the current pause state.
+   */
+  async getPauseInfo(): Promise<PauseInfo> {
+    const result = await this.query('get_pause_info', []);
+    return result as unknown as PauseInfo;
+  }
+
+  // ==========================================================================
+  // Batch Operations
+  // ==========================================================================
+
+  /**
+   * Registers multiple properties in a single transaction.
+   */
+  async batchRegisterProperties(
+    signer: Signer,
+    metadataList: PropertyMetadata[],
+  ): Promise<{ batchResult: BatchResult } & TxResult> {
+    const encoded = metadataList.map((m) => this.encodePropertyMetadata(m));
+    const txResult = await this.submitTx(signer, 'batch_register_properties', [encoded]);
+    return { batchResult: {} as BatchResult, ...txResult };
+  }
+
+  /**
+   * Transfers multiple properties to the same recipient.
+   */
+  async batchTransferProperties(
+    signer: Signer,
+    propertyIds: number[],
+    to: string,
+  ): Promise<TxResult> {
+    return this.submitTx(signer, 'batch_transfer_properties', [propertyIds, to]);
+  }
+
+  /**
+   * Gets batch operation configuration.
+   */
+  async getBatchConfig(): Promise<BatchConfig> {
+    const result = await this.query('get_batch_config', []);
+    return result as unknown as BatchConfig;
+  }
+
+  /**
+   * Gets batch operation statistics.
+   */
+  async getBatchStats(): Promise<BatchOperationStats> {
+    const result = await this.query('get_batch_operation_stats', []);
+    return result as unknown as BatchOperationStats;
+  }
+
+  // ==========================================================================
+  // Fee Operations
+  // ==========================================================================
+
+  /**
+   * Gets the dynamic fee for an operation.
+   */
+  async getDynamicFee(operation: FeeOperation): Promise<bigint> {
+    const result = await this.query('get_dynamic_fee', [operation]);
+    return BigInt((result as string) ?? '0');
+  }
+
+  // ==========================================================================
+  // Admin Operations
+  // ==========================================================================
+
+  /**
+   * Changes the admin account.
+   */
+  async changeAdmin(signer: Signer, newAdmin: string): Promise<TxResult> {
+    return this.submitTx(signer, 'change_admin', [newAdmin]);
+  }
+
+  /**
+   * Sets the oracle contract address.
+   */
+  async setOracle(signer: Signer, oracleAddress: string): Promise<TxResult> {
+    return this.submitTx(signer, 'set_oracle', [oracleAddress]);
+  }
+
+  /**
+   * Sets the fee manager contract address.
+   */
+  async setFeeManager(signer: Signer, feeManager: string | null): Promise<TxResult> {
+    return this.submitTx(signer, 'set_fee_manager', [feeManager]);
+  }
+
+  // ==========================================================================
+  // Event Subscriptions
+  // ==========================================================================
+
+  /**
+   * Subscribes to a specific contract event.
+   *
+   * @typeParam E - Event name from the PropChainEventMap
+   * @param eventName - The event to listen for
+   * @param callback - Called with the typed event payload
+   * @returns A subscription handle
+   */
+  async on<E extends PropChainEventName>(
+    eventName: E,
+    callback: (event: PropChainEventMap[E]) => void,
+  ): Promise<Subscription> {
+    return subscribeToNamedEvent(
+      this.api,
+      this.contractAddress,
+      this.abi,
+      eventName,
+      callback,
+    );
+  }
+
+  // ==========================================================================
+  // Gas Estimation
+  // ==========================================================================
+
+  /**
+   * Estimates gas for a contract call.
+   *
+   * @param callerAddress - The caller's address
+   * @param method - Contract method name
+   * @param args - Method arguments
+   * @returns Gas and storage deposit estimation
+   */
+  async estimateGas(
+    callerAddress: string,
+    method: string,
+    args: unknown[],
+  ): Promise<GasEstimation> {
+    const message = this.contract.query[method];
+    if (!message) {
+      throw new Error(`Unknown contract method: ${method}`);
+    }
+
+    const result = await message(callerAddress, { gasLimit: -1 }, ...args);
+
+    return {
+      gasRequired: BigInt(result.gasRequired?.toString() ?? '0'),
+      storageDeposit: BigInt(result.storageDeposit?.toString() ?? '0'),
+    };
+  }
+
+  // ==========================================================================
+  // Internal Helpers
+  // ==========================================================================
+
+  /**
+   * Performs a read-only query against the contract.
+   */
+  private async query(method: string, args: unknown[]): Promise<unknown> {
+    const queryFn = this.contract.query[method];
+    if (!queryFn) {
+      throw new Error(`Unknown query method: ${method}`);
+    }
+
+    // Use a dummy address for read-only queries
+    const dummyAddress = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
+    const { result, output } = await queryFn(dummyAddress, { gasLimit: -1 }, ...args);
+
+    if (result.isErr) {
+      const errorVariant = result.asErr?.toString() ?? 'Unknown';
+      throw decodeContractError(errorVariant);
+    }
+
+    if (output) {
+      return output.toJSON();
+    }
+    return null;
+  }
+
+  /**
+   * Submits a state-mutating transaction to the contract.
+   */
+  private async submitTx(
+    signer: Signer,
+    method: string,
+    args: unknown[],
+  ): Promise<TxResult> {
+    const signerAddress = typeof signer === 'string' ? signer : signer.address;
+
+    // Dry-run to estimate gas
+    const queryFn = this.contract.query[method];
+    if (!queryFn) {
+      throw new Error(`Unknown contract method: ${method}`);
+    }
+
+    const { gasRequired, result: dryRunResult } = await queryFn(
+      signerAddress,
+      { gasLimit: -1 },
+      ...args,
+    );
+
+    if (dryRunResult.isErr) {
+      const errorVariant = dryRunResult.asErr?.toString() ?? 'Unknown';
+      throw decodeContractError(errorVariant);
+    }
+
+    // Submit the actual transaction
+    const txFn = this.contract.tx[method];
+    if (!txFn) {
+      throw new Error(`Unknown tx method: ${method}`);
+    }
+
+    return new Promise<TxResult>((resolve, reject) => {
+      const tx = txFn({ gasLimit: gasRequired }, ...args);
+
+      const signOptions = typeof signer === 'string' ? {} : undefined;
+
+      tx.signAndSend(
+        signer as KeyringPair,
+        signOptions ?? {},
+        ({ status, events: rawEvents, dispatchError }) => {
+          if (dispatchError) {
+            reject(
+              new TransactionError(
+                `Transaction failed: ${dispatchError.toString()}`,
+                undefined,
+                dispatchError.toString(),
+              ),
+            );
+            return;
+          }
+
+          if (status.isFinalized) {
+            const blockHash = status.asFinalized.toString();
+            const decodedEvents: ContractEvent[] = decodeTransactionEvents(
+              this.abi,
+              rawEvents as unknown as Array<{
+                event: { data: Uint8Array; section: string; method: string };
+              }>,
+              this.contractAddress,
+            );
+
+            resolve({
+              txHash: tx.hash.toString(),
+              blockHash,
+              blockNumber: 0, // Filled from block details if needed
+              events: decodedEvents,
+              success: true,
+            });
+          }
+        },
+      ).catch(reject);
+    });
+  }
+
+  /**
+   * Encodes PropertyMetadata for contract calls.
+   */
+  private encodePropertyMetadata(metadata: PropertyMetadata): unknown {
+    return {
+      location: metadata.location,
+      size: metadata.size,
+      legal_description: metadata.legalDescription,
+      valuation: metadata.valuation.toString(),
+      documents_url: metadata.documentsUrl,
+    };
+  }
+
+  /**
+   * Decodes raw property info from the contract.
+   */
+  private decodePropertyInfo(raw: unknown): PropertyInfo {
+    const data = raw as Record<string, unknown>;
+    const meta = data.metadata as Record<string, unknown>;
+    return {
+      id: data.id as number,
+      owner: data.owner as string,
+      metadata: {
+        location: meta.location as string,
+        size: meta.size as number,
+        legalDescription: (meta.legal_description ?? meta.legalDescription) as string,
+        valuation: BigInt((meta.valuation as string) ?? '0'),
+        documentsUrl: (meta.documents_url ?? meta.documentsUrl) as string,
+      },
+      registeredAt: data.registered_at as number,
+    };
+  }
+}

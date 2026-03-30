@@ -19,6 +19,7 @@ pub enum Role {
     Manager,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, scale::Encode, scale::Decode)]
 #[cfg_attr(
     feature = "std",
@@ -101,14 +102,15 @@ pub enum AccessControlError {
     Unauthorized,
 }
 
+type PermissionCacheKey = (AccountId, Permission, u64);
+
 #[ink::storage_item]
 #[derive(Default)]
 pub struct AccessControl {
     role_assignments: Mapping<(AccountId, Role), bool>,
     role_permissions: Mapping<(Role, Permission), bool>,
     account_permissions: Mapping<(AccountId, Permission), bool>,
-    #[allow(clippy::type_complexity)]
-    permission_cache: Mapping<(AccountId, Permission, u64), bool>,
+    permission_cache: Mapping<PermissionCacheKey, bool>,
     audit_log: Mapping<u64, PermissionAuditEntry>,
     audit_count: u64,
     cache_epoch: u64,

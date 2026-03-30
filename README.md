@@ -87,7 +87,14 @@ cargo test                 # Run all tests including integration
 ./scripts/test.sh                      # Run all tests
 ./scripts/test.sh --coverage           # Run with coverage
 ./scripts/e2e-test.sh                  # Run E2E tests
+
+# Load Testing (Performance Validation)
+./scripts/load_test.sh                 # Run full load test suite
+cargo test --package propchain-tests load_test_concurrent_registration_light --release  # Quick validation
+cargo test --package propchain-tests stress_test_mass_registration --release  # Stress test
 ```
+
+For comprehensive load testing documentation, see [Load Testing Guide](docs/LOAD_TESTING_GUIDE.md).
 
 ## 🌐 Network Configuration
 
@@ -114,11 +121,23 @@ TARGET=wasm32-unknown-unknown
 
 ## 📚 Documentation & Resources
 
+### 🏗️ Architecture Documentation (NEW!)
+- **[📋 Architecture Index](./docs/ARCHITECTURE_INDEX.md)** - Complete guide to all architecture docs
+- **[🌐 System Architecture Overview](./docs/SYSTEM_ARCHITECTURE_OVERVIEW.md)** - High-level system design and components
+- **[🔗 Component Interaction Diagrams](./docs/COMPONENT_INTERACTION_DIAGRAMS.md)** - Detailed interaction sequences
+- **[📐 Architectural Principles](./docs/ARCHITECTURAL_PRINCIPLES.md)** - Design philosophy and decisions
+- **[📝 Documentation Maintenance](./docs/ARCHITECTURE_DOCUMENTATION_MAINTENANCE.md)** - How we keep docs current
+
 ### Contract Documentation
 - **[📖 Contract API](./docs/contracts.md)** - Complete contract interface documentation
 - **[🔗 Integration Guide](./docs/integration.md)** - How to integrate with frontend applications
 - **[🚀 Deployment Guide](./docs/deployment.md)** - Contract deployment best practices
 - **[🏗️ Architecture](./docs/architecture.md)** - Contract design and technical architecture
+
+### Frontend SDK
+- **[📦 Frontend SDK](./sdk/frontend/)** - TypeScript SDK for dApp integration
+- **[📖 Frontend SDK Guide](./docs/FRONTEND_SDK_GUIDE.md)** - Comprehensive usage guide with API reference
+- **[💻 Example React App](./sdk/frontend/examples/react-app/)** - Working Vite + React example
 
 ### Development Documentation
 - **[🛠️ Development Setup](./DEVELOPMENT.md)** - Complete development environment setup
@@ -132,6 +151,12 @@ PropChain-contract/
 │   ├── 📁 lib/            # Contract logic and implementations
 │   ├── 📁 traits/         # Shared trait definitions
 │   └── 📁 tests/          # Contract unit tests
+├── 📁 sdk/                # SDK packages
+│   ├── 📁 frontend/      # TypeScript SDK for dApp integration
+│   │   ├── 📁 src/       # SDK source (types, clients, utils)
+│   │   ├── 📁 __tests__/ # Unit and integration tests
+│   │   └── 📁 examples/  # Example React application
+│   └── 📁 mobile/        # Mobile SDK (React Native, Flutter)
 ├── 📁 scripts/            # Deployment and utility scripts
 ├── 📁 tests/              # Integration and E2E tests
 ├── 📁 docs/               # Comprehensive documentation
@@ -183,6 +208,12 @@ PropChain-contract/
 - [ ] Cross-chain Bridge
 - [ ] Mobile SDK
 - [ ] Advanced Analytics
+
+### ✅ Recently Completed
+- [x] Frontend SDK with TypeScript support
+- [x] Example React frontend application
+- [x] Frontend integration testing
+- [x] Frontend SDK documentation
 
 ### 📋 Planned Features
 - [ ] Governance System
