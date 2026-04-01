@@ -5,7 +5,12 @@
 // =========================================================================
 pub mod access_control;
 pub mod constants;
+pub mod crypto;
 pub mod errors;
+pub mod randomness;
+
+pub use access_control::*;
+pub use crypto::*;
 pub mod i18n;
 pub mod monitoring;
 
@@ -542,4 +547,6 @@ pub enum SecurityEventType {
     // --- Security violations ---
     UnauthorizedAccess,
     ComplianceViolation,
+    /// Cryptographic operations: hashing, signature verification, key rotation
+    Cryptographic,
 }
