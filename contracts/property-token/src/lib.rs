@@ -78,6 +78,8 @@ pub mod property_token {
         property_management_contract: Option<AccountId>,
         /// On-chain management agent per property token (tokenized property)
         management_agent: Mapping<TokenId, AccountId>,
+        /// Vesting schedules for tokens (TokenId, AccountId)
+        vesting_schedules: Mapping<(TokenId, AccountId), VestingSchedule>,
     }
 
     // Data types extracted to types.rs (Issue #101)
@@ -406,6 +408,7 @@ pub mod property_token {
                 max_batch_size: 50,
                 property_management_contract: None,
                 management_agent: Mapping::default(),
+                vesting_schedules: Mapping::default(),
             }
         }
 
@@ -2377,6 +2380,136 @@ pub mod property_token {
             }
 
             errors
+        }
+
+        // =========================================================================
+        // Vesting Methods
+        // =========================================================================
+
+        /// Creates a vesting schedule for an account
+        #[ink(message)]
+        pub fn create_vesting_schedule(
+            &mut self,
+            token_id: TokenId,
+            account: AccountId,
+            role: VestingRole,
+            total_amount: u128,
+            start_time: u64,
+            cliff_duration: u64,
+            vesting_duration: u64,
+        ) -> Result<(), Error> {
+            let caller = self.env().caller();
+            let owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+            if caller != self.admin && caller != owner {
+                return Err(Error::Unauthorized);
+            }
+            if total_amount == 0 {
+                return Err(Error::InvalidAmount);
+            }
+            if self.vesting_schedules.get((token_id, account)).is_some() {
+                return Err(Error::Unauthorized); // Schedule already exists
+            }
+
+            // Deduct fractional shares from the creator's balance
+            let creator_balance = self.balances.get((caller, token_id)).unwrap_or(0);
+            if creator_balance < total_amount {
+                return Err(Error::Unauthorized); // Insufficient fractional shares
+            }
+            self.balances.insert((caller, token_id), &(creator_balance - total_amount));
+
+            let schedule = VestingSchedule {
+                role: role.clone(),
+                total_amount,
+                claimed_amount: 0,
+                start_time,
+                cliff_duration,
+                vesting_duration,
+            };
+
+            self.vesting_schedules.insert((token_id, account), &schedule);
+
+            self.env().emit_event(VestingScheduleCreated {
+                token_id,
+                account,
+                role,
+                total_amount,
+                start_time,
+                cliff_duration,
+                vesting_duration,
+            });
+
+            Ok(())
+        }
+
+        /// Claims available vested tokens
+        #[ink(message)]
+        pub fn claim_vested_tokens(&mut self, token_id: TokenId) -> Result<(), Error> {
+            let caller = self.env().caller();
+            let mut schedule = self.vesting_schedules.get((token_id, caller)).ok_or(Error::Unauthorized)?; // Using Unauthorized generically as there's no custom vesting error yet
+
+            let current_time = self.env().block_timestamp();
+            
+            // Calculate vested amount
+            let vested_amount = if current_time < schedule.start_time + schedule.cliff_duration {
+                0
+            } else if current_time >= schedule.start_time + schedule.vesting_duration {
+                schedule.total_amount
+            } else {
+                let time_vested = current_time - schedule.start_time;
+                (schedule.total_amount as u128 * time_vested as u128) / (schedule.vesting_duration as u128)
+            };
+
+            let claimable = vested_amount.saturating_sub(schedule.claimed_amount);
+            if claimable == 0 {
+                return Err(Error::InvalidAmount);
+            }
+
+            schedule.claimed_amount += claimable;
+            self.vesting_schedules.insert((token_id, caller), &schedule);
+
+            // Add the fractional shares to the caller's balance
+            let current_balance = self.balances.get((caller, token_id)).unwrap_or(0);
+            self.balances.insert((caller, token_id), &(current_balance + claimable));
+
+            self.env().emit_event(VestedTokensClaimed {
+                token_id,
+                account: caller,
+                amount: claimable,
+            });
+
+            Ok(())
+        }
+
+        /// Gets the vesting schedule for an account
+        #[ink(message)]
+        pub fn get_vesting_schedule(
+            &self,
+            token_id: TokenId,
+            account: AccountId,
+        ) -> Option<VestingSchedule> {
+            self.vesting_schedules.get((token_id, account))
+        }
+
+        /// Calculates the amount of tokens currently vested
+        #[ink(message)]
+        pub fn get_vested_amount(
+            &self,
+            token_id: TokenId,
+            account: AccountId,
+        ) -> u128 {
+            if let Some(schedule) = self.vesting_schedules.get((token_id, account)) {
+                let current_time = self.env().block_timestamp();
+                if current_time < schedule.start_time + schedule.cliff_duration {
+                    0
+                } else if current_time >= schedule.start_time + schedule.vesting_duration {
+                    schedule.total_amount
+                } else {
+                    let time_vested = current_time - schedule.start_time;
+                    (schedule.total_amount as u128 * time_vested as u128) / (schedule.vesting_duration as u128)
+                }
+            } else {
+                0
+            }
         }
     }
 
