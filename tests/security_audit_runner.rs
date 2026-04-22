@@ -257,7 +257,8 @@ fn security_audit_report() {
     audit.add(SecurityFinding {
         id: "OV-01".to_string(),
         title: "Zero-amount share transfer".to_string(),
-        description: "Zero-amount share transfers must be rejected to prevent griefing.".to_string(),
+        description: "Zero-amount share transfers must be rejected to prevent griefing."
+            .to_string(),
         severity: Severity::Medium,
         category: "Arithmetic Safety".to_string(),
         status: FindingStatus::Mitigated,
@@ -267,7 +268,8 @@ fn security_audit_report() {
     audit.add(SecurityFinding {
         id: "OV-02".to_string(),
         title: "Over-spend of share balance".to_string(),
-        description: "Verified that accounts cannot transfer more shares than they own.".to_string(),
+        description: "Verified that accounts cannot transfer more shares than they own."
+            .to_string(),
         severity: Severity::Critical,
         category: "Arithmetic Safety".to_string(),
         status: FindingStatus::Mitigated,
@@ -277,7 +279,9 @@ fn security_audit_report() {
     audit.add(SecurityFinding {
         id: "OV-06".to_string(),
         title: "Underpayment for share purchase".to_string(),
-        description: "Verified that purchase_shares validates the transferred value matches price * amount.".to_string(),
+        description:
+            "Verified that purchase_shares validates the transferred value matches price * amount."
+                .to_string(),
         severity: Severity::Critical,
         category: "Arithmetic Safety".to_string(),
         status: FindingStatus::Mitigated,
@@ -288,7 +292,8 @@ fn security_audit_report() {
     audit.add(SecurityFinding {
         id: "CP-01".to_string(),
         title: "Self-certification of compliance".to_string(),
-        description: "Verified that token owners cannot self-certify their own compliance.".to_string(),
+        description: "Verified that token owners cannot self-certify their own compliance."
+            .to_string(),
         severity: Severity::Critical,
         category: "Compliance".to_string(),
         status: FindingStatus::Mitigated,
@@ -298,7 +303,8 @@ fn security_audit_report() {
     audit.add(SecurityFinding {
         id: "CP-04".to_string(),
         title: "Bridging with revoked compliance".to_string(),
-        description: "Verified that revoking compliance blocks subsequent bridge operations.".to_string(),
+        description: "Verified that revoking compliance blocks subsequent bridge operations."
+            .to_string(),
         severity: Severity::High,
         category: "Compliance".to_string(),
         status: FindingStatus::Mitigated,
