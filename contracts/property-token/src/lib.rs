@@ -2,7 +2,10 @@
 #![allow(
     unexpected_cfgs,
     clippy::type_complexity,
-    clippy::needless_borrows_for_generic_args
+    clippy::needless_borrows_for_generic_args,
+    clippy::cast_possible_truncation,
+    clippy::arithmetic_side_effects,
+    clippy::cast_sign_loss
 )]
 
 use ink::prelude::string::String;
