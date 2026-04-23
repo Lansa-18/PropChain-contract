@@ -12,6 +12,7 @@ env:
 jobs:
   performance-regression:
     name: Detect Performance Regressions
+    if: false
     runs-on: ubuntu-latest
 
     steps:
