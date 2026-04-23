@@ -11,10 +11,8 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::{Any, CorsLayer};
-use tower_governor::{
-    governor::GovernorConfigBuilder, GovernorLayer,
-};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser, Debug)]

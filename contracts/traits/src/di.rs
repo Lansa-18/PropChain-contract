@@ -153,11 +153,7 @@ impl ContainerConfig {
     ///
     /// Returns `Err(DependencyError::InvalidAddress)` if `address` is the
     /// all-zeros account (a common mistake when passing uninitialized values).
-    pub fn register(
-        &mut self,
-        key: ServiceKey,
-        address: AccountId,
-    ) -> Result<(), DependencyError> {
+    pub fn register(&mut self, key: ServiceKey, address: AccountId) -> Result<(), DependencyError> {
         if address == AccountId::from([0u8; 32]) {
             return Err(DependencyError::InvalidAddress);
         }

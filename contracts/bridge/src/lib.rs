@@ -562,7 +562,12 @@ mod bridge {
 
             // Enforce rate limiting
             // For cross-chain trades, we track the volume (amount_in) but don't count it as an NFT request.
-            self.check_and_update_rate_limits(self.env().caller(), destination_chain, amount_in, false)?;
+            self.check_and_update_rate_limits(
+                self.env().caller(),
+                destination_chain,
+                amount_in,
+                false,
+            )?;
 
             self.cross_chain_trade_counter += 1;
             let trade_id = self.cross_chain_trade_counter;
@@ -850,7 +855,8 @@ mod bridge {
                     return Err(Error::RateLimitExceeded);
                 }
 
-                self.account_daily_requests.insert(account, &(daily_requests + 1));
+                self.account_daily_requests
+                    .insert(account, &(daily_requests + 1));
             }
 
             if amount > 0 {
@@ -858,12 +864,16 @@ mod bridge {
                     .chain_info
                     .get(destination_chain)
                     .ok_or(Error::InvalidChain)?;
-                let last_chain_reset = self.chain_last_reset_day.get(destination_chain).unwrap_or(0);
+                let last_chain_reset = self
+                    .chain_last_reset_day
+                    .get(destination_chain)
+                    .unwrap_or(0);
                 let mut chain_volume = self.chain_daily_volume.get(destination_chain).unwrap_or(0);
 
                 if last_chain_reset < current_day {
                     chain_volume = 0;
-                    self.chain_last_reset_day.insert(destination_chain, &current_day);
+                    self.chain_last_reset_day
+                        .insert(destination_chain, &current_day);
                 }
 
                 if chain_volume.saturating_add(amount) > chain_info.chain_daily_limit {

@@ -150,7 +150,7 @@ pub struct ChainBridgeInfo {
     pub gas_multiplier: u32,      // Gas cost multiplier for this chain
     pub confirmation_blocks: u32, // Blocks to wait for confirmation
     pub supported_tokens: Vec<TokenId>,
-    pub chain_daily_limit: u128,  // Max volume allowed to be routed to this chain per day
+    pub chain_daily_limit: u128, // Max volume allowed to be routed to this chain per day
 }
 
 /// Bridge fee quote for cross-chain operations

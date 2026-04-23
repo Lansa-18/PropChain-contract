@@ -533,20 +533,20 @@ pub mod propchain_identity {
             }
 
             // Get and update reputation metrics
-            let mut metrics = self
-                .reputation_metrics
-                .get(&target_account)
-                .unwrap_or(ReputationMetrics {
-                    total_transactions: 0,
-                    successful_transactions: 0,
-                    failed_transactions: 0,
-                    dispute_count: 0,
-                    dispute_resolved_count: 0,
-                    average_transaction_value: 0,
-                    total_value_transacted: 0,
-                    last_updated: timestamp,
-                    reputation_score: 500,
-                });
+            let mut metrics =
+                self.reputation_metrics
+                    .get(&target_account)
+                    .unwrap_or(ReputationMetrics {
+                        total_transactions: 0,
+                        successful_transactions: 0,
+                        failed_transactions: 0,
+                        dispute_count: 0,
+                        dispute_resolved_count: 0,
+                        average_transaction_value: 0,
+                        total_value_transacted: 0,
+                        last_updated: timestamp,
+                        reputation_score: 500,
+                    });
 
             metrics.total_transactions += 1;
             metrics.total_value_transacted += transaction_value;
@@ -949,7 +949,11 @@ pub mod propchain_identity {
             // Calculate success rate
             #[allow(clippy::manual_checked_ops)]
             let success_rate = if metrics.total_transactions > 0 {
-                metrics.successful_transactions.saturating_mul(100).checked_div(metrics.total_transactions).unwrap_or(50)
+                metrics
+                    .successful_transactions
+                    .saturating_mul(100)
+                    .checked_div(metrics.total_transactions)
+                    .unwrap_or(50)
             } else {
                 50 // Default for no history
             };

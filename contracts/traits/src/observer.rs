@@ -23,9 +23,9 @@
 //! bus.emit(&EventKind::Transfer { from: None, to: alice, token_id: 1 });
 //! ```
 
-use ink::prelude::vec::Vec;
-use ink::prelude::boxed::Box;
 use crate::{AccountId, TokenId};
+use ink::prelude::boxed::Box;
+use ink::prelude::vec::Vec;
 
 // ── Event catalogue ────────────────────────────
 
@@ -51,7 +51,10 @@ pub enum EventKind {
     },
     /// Operator-level approval for all tokens of an owner.
     ApprovalForAll {
-        owner: Ac────
+        owner: AccountId,
+        operator: AccountId,
+        approved: bool,
+    },
     /// A new property NFT was minted.
     PropertyMinted {
         token_id: TokenId,
@@ -59,10 +62,7 @@ pub enum EventKind {
         owner: AccountId,
     },
     /// Compliance status changed for a token.
-    ComplianceUpdated {
-        token_id: TokenId,
-        verified: bool,
-    },
+    ComplianceUpdated { token_id: TokenId, verified: bool },
 
     // ── Fractional / dividend ────────────────────────────────────────────
     /// Fractional shares issued to an account.
@@ -72,43 +72,31 @@ pub enum EventKind {
         amount: u128,
     },
     /// Dividends deposited for a token.
-    DividendsDeposited {
-        token_id: TokenId,
-        amount: u128,
-    },
+    DividendsDeposited { token_id: TokenId, amount: u128 },
 
     // ── Governance ───────────────────────────────────────────────────────
     /// A governance proposal was created.
-    ProposalCreated {
-        token_id: TokenId,
-        proposal────────────────────────────────────────
+    ProposalCreated { token_id: TokenId, proposal_id: u64 },
+
+    // ── Bridge ───────────────────────────────────────────────────────────
     /// A cross-chain bridge request was created.
-    BridgeRequested {
-        request_id: u64,
-        token_id: TokenId,
-    },
+    BridgeRequested { request_id: u64, token_id: TokenId },
     /// A bridge request completed successfully.
-    BridgeExecuted {
-        request_id: u64,
-        token_id: TokenId,
-    },
+    BridgeExecuted { request_id: u64, token_id: TokenId },
     /// A bridge request failed.
-    BridgeFailed {
-        request_id: u64,
-        token_id: TokenId,
-    },
+    BridgeFailed { request_id: u64, token_id: TokenId },
 
     // ── Generic escape hatch ─────────────────────────────────────────────
     /// Custom event for future extensions without an enum variant.
-    Custom {
-        tag: ink::prelude::string::String,
-    },
+    Custom { tag: ink::prelude::string::String },
 }
 
 // ── Observer trait ───────────────────────────────────────────────────────────
 
-/// Implement this ts registered with.  Implementations should be cheap — defer heavy
-    /// work to off-chain indexers.
+/// Implement this trait for any type that should react to contract events.
+pub trait EventObserver {
+    /// Called when an event is emitted by the contract this observer is registered
+    /// with.  Implementations should be cheap — defer heavy work to off-chain indexers.
     fn on_event(&mut self, kind: &EventKind);
 
     /// Human-readable name used in logs and diagnostics.
@@ -133,7 +121,14 @@ pub struct EventBus {
 }
 
 impl EventBus {
-    /// Create an empty event buervers are notified in FIFO order.
+    /// Create an empty event bus.
+    pub fn new() -> Self {
+        Self {
+            observers: Vec::new(),
+        }
+    }
+
+    /// Register an observer. Observers are notified in FIFO order.
     pub fn subscribe(&mut self, observer: Box<dyn EventObserver>) {
         self.observers.push(observer);
     }

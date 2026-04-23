@@ -52,20 +52,25 @@ mod event_bus_contract {
 
     impl EventBus for EventBusContract {
         #[ink(message)]
-        fn publish(&mut self, topic: Topic, mut payload: EventPayload) -> Result<(), EventBusError> {
+        fn publish(
+            &mut self,
+            topic: Topic,
+            mut payload: EventPayload,
+        ) -> Result<(), EventBusError> {
             // Overwrite emitter to ensure authenticity of the payload
             payload.emitter = self.env().caller();
 
             let subscribers = self.subscribers.get(topic).unwrap_or_default();
-            
+
             // Loop through each subscriber and deliver the event
             for subscriber_account in &subscribers {
                 // Call the `on_event_received` method of the subscriber
-                // Note: We use try_call or just instantiate the Ref. 
+                // Note: We use try_call or just instantiate the Ref.
                 // Using builder pattern for safety in ink! 4+
-                let mut subscriber: EventSubscriberRef = ink::env::call::FromAccountId::from_account_id(*subscriber_account);
-                
-                // Fire and forget, or handle errors? 
+                let mut subscriber: EventSubscriberRef =
+                    ink::env::call::FromAccountId::from_account_id(*subscriber_account);
+
+                // Fire and forget, or handle errors?
                 // If we unwrap, one failing subscriber bricks the entire publish.
                 // We will ignore errors from subscribers to prevent griefing attacks.
                 let _ = subscriber.on_event_received(topic, payload.clone());
@@ -123,7 +128,7 @@ mod event_bus_contract {
                 Err(EventBusError::NotSubscribed)
             }
         }
-        
+
         #[ink(message)]
         fn get_subscribers(&self, topic: Topic) -> Vec<AccountId> {
             self.subscribers.get(topic).unwrap_or_default()

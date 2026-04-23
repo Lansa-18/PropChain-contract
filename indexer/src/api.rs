@@ -45,19 +45,28 @@ pub async fn list_events(
 
     if let (Some(f), Some(t)) = (from_ts, to_ts) {
         if f > t {
-            return Err((StatusCode::BAD_REQUEST, "from_ts must be <= to_ts".to_string()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "from_ts must be <= to_ts".to_string(),
+            ));
         }
     }
 
     if let (Some(f), Some(t)) = (params.from_block, params.to_block) {
         if f > t {
-            return Err((StatusCode::BAD_REQUEST, "from_block must be <= to_block".to_string()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "from_block must be <= to_block".to_string(),
+            ));
         }
     }
 
     if let Some(limit) = params.limit {
         if limit <= 0 || limit > 1000 {
-            return Err((StatusCode::BAD_REQUEST, "limit must be between 1 and 1000".to_string()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "limit must be between 1 and 1000".to_string(),
+            ));
         }
     }
 
