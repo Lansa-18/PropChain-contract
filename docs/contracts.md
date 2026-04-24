@@ -24,7 +24,7 @@ Standard ERC-721 owner query.
 ##### `transfer_from(from: AccountId, to: AccountId, token_id: TokenId) -> Result<(), Error>`
 Standard ERC-721 transfer with property-specific authorization checks.
 
-##### `safe_batch_transfer_from(from: AccountId, to: AccountId, ids: Vec<TokenId>, amounts: Vec<u128>, data: Vec<u8>) -> Result<(), Error>`
+##### `safe_batch_transfer_from(from: AccountId, to: AccountId, ids: Vec<TokenId>, amounts: Vec<u128>, _data: Vec<u8>) -> Result<(), Error>`
 Standard ERC-1155 batch transfer support.
 
 ##### `attach_legal_document(token_id: TokenId, document_hash: Hash, document_type: String) -> Result<(), Error>`
@@ -79,7 +79,7 @@ Allows bridge operators to sign/approve a pending request.
 ##### `execute_bridge(request_id: u64) -> Result<(), Error>`
 Executes the bridge operation once the required signature threshold is met.
 
-##### `estimate_bridge_gas(token_id: TokenId, destination_chain: ChainId) -> Result<u64, Error>`
+##### `estimate_bridge_gas(_token_id: TokenId, destination_chain: ChainId) -> Result<u64, Error>`
 Estimates the gas costs for a cross-chain transfer.
 
 ---
@@ -143,16 +143,16 @@ Performs a compliance check without revealing any sensitive user data.
 #### PropertyRegistry
 *Note: PropertyToken replaces many of these functions in newer implementations.*
 
-##### `new()`
+##### `new() -> Self`
 Creates a new PropertyRegistry instance.
 
-##### `register_property(metadata: PropertyMetadata) -> Result<PropertyId, Error>`
+##### `register_property(metadata: PropertyMetadata) -> Result<u64, Error>`
 Registers a new property.
 
 #### EscrowContract
 *Note: AdvancedEscrow features are now integrated into core flows.*
 
-##### `create_escrow(property_id: PropertyId, buyer: AccountId, amount: Balance) -> Result<EscrowId, Error>`
+##### `create_escrow(property_id: u64, buyer: AccountId, amount: u128) -> Result<u64, Error>`
 Creates a new escrow for property transfer.
 
 ---
@@ -163,13 +163,13 @@ Provides real-time property valuations using multiple oracle sources with aggreg
 
 #### Methods
 
-##### `get_property_valuation(property_id: PropertyId) -> Result<PropertyValuation, OracleError>`
+##### `get_property_valuation(property_id: u64) -> Result<PropertyValuation, OracleError>`
 Gets the current property valuation.
 
-##### `get_valuation_with_confidence(property_id: PropertyId) -> Result<ValuationWithConfidence, OracleError>`
+##### `get_valuation_with_confidence(property_id: u64) -> Result<ValuationWithConfidence, OracleError>`
 Gets property valuation with confidence metrics including volatility and confidence intervals.
 
-##### `update_valuation_from_sources(property_id: PropertyId) -> Result<(), OracleError>`
+##### `update_valuation_from_sources(property_id: u64) -> Result<(), OracleError>`
 Updates property valuation by aggregating prices from all active oracle sources.
 
 ## Data Structures
