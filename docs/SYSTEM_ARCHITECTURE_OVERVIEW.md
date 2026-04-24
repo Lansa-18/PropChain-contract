@@ -95,13 +95,13 @@ pub struct PropertyInfo {
     pub owner: AccountId,
     pub metadata: PropertyMetadata,
     pub registered_at: u64,
-    pub valuation: u128,
 }
 
 pub struct PropertyMetadata {
     pub location: String,
     pub size: u64,
     pub legal_description: String,
+    pub valuation: u128,
     pub documents_url: String,
 }
 ```
@@ -133,7 +133,6 @@ pub struct EscrowInfo {
     pub seller: AccountId,
     pub amount: u128,
     pub released: bool,
-    pub conditions: Vec<EscrowCondition>,
 }
 ```
 
@@ -565,6 +564,7 @@ pub struct HealthStatus {
     pub escrow_count: u64,
     pub has_oracle: bool,
     pub has_compliance_registry: bool,
+    pub has_fee_manager: bool,
     pub block_number: u32,
     pub timestamp: u64,
 }

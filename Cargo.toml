@@ -26,7 +26,6 @@ members = [
     "contracts/database",
     "contracts/third-party",
     "contracts/staking",
-    "contracts/event_bus",
     "tests",
     "indexer",
 ]

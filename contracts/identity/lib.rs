@@ -2,6 +2,11 @@
 #![allow(unexpected_cfgs)]
 #![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(clippy::enum_variant_names)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::unnecessary_lazy_evaluations)]
+#![allow(clippy::unnecessary_cast)]
 
 use ink::prelude::string::String;
 use ink::prelude::vec::Vec;

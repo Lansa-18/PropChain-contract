@@ -101,6 +101,7 @@ mod propchain_oracle {
     /// A pending multi-sig proposal for a critical oracle operation.
     #[derive(scale::Encode, scale::Decode, Clone)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[cfg_attr(feature = "std", derive(ink::storage::traits::StorageLayout))]
     pub struct MultiSigProposal {
         /// Keccak-256 hash of the encoded action (used to identify what is being approved).
         pub action_hash: Hash,
