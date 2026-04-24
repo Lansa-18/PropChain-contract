@@ -18,6 +18,7 @@ pub enum Error {
     InvalidBridgeRoute,
     CrossChainTradeNotFound,
     InsufficientGovernanceBalance,
+    ReentrantCall,
 }
 
 impl core::fmt::Display for Error {
@@ -40,6 +41,7 @@ impl core::fmt::Display for Error {
             Error::InsufficientGovernanceBalance => {
                 write!(f, "Insufficient governance balance")
             }
+            Error::ReentrantCall => write!(f, "Reentrant call"),
         }
     }
 }
@@ -64,6 +66,7 @@ impl ContractError for Error {
             Error::InsufficientGovernanceBalance => {
                 dex_codes::DEX_INSUFFICIENT_GOVERNANCE_BALANCE
             }
+            Error::ReentrantCall => dex_codes::REENTRANT_CALL,
         }
     }
 
@@ -86,6 +89,7 @@ impl ContractError for Error {
             Error::InsufficientGovernanceBalance => {
                 "The account does not hold enough governance tokens"
             }
+            Error::ReentrantCall => "Reentrancy guard detected a reentrant call",
         }
     }
 

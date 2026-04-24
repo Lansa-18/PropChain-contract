@@ -5742,6 +5742,7 @@ dependencies = [
  "ink 5.1.1",
  "ink_e2e",
  "parity-scale-codec",
+ "propchain-contracts",
  "propchain-traits",
  "scale-info",
 ]
@@ -5752,6 +5753,7 @@ version = "1.0.0"
 dependencies = [
  "ink 5.1.1",
  "parity-scale-codec",
+ "propchain-contracts",
  "propchain-traits",
  "scale-info",
 ]
@@ -5814,6 +5816,7 @@ dependencies = [
  "ink 5.1.1",
  "ink_e2e",
  "parity-scale-codec",
+ "propchain-contracts",
  "propchain-traits",
  "scale-info",
 ]
@@ -5855,6 +5858,7 @@ version = "1.0.0"
 dependencies = [
  "ink 5.1.1",
  "parity-scale-codec",
+ "propchain-contracts",
  "propchain-traits",
  "scale-info",
 ]
@@ -5910,11 +5914,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "property-management"
+version = "1.0.0"
+dependencies = [
+ "ink 5.1.1",
+ "parity-scale-codec",
+ "propchain-contracts",
+ "propchain-traits",
+ "scale-info",
+]
+
+[[package]]
 name = "property-token"
 version = "1.0.0"
 dependencies = [
  "ink 5.1.1",
  "parity-scale-codec",
+ "propchain-contracts",
  "propchain-traits",
  "scale-info",
 ]
@@ -8776,6 +8792,7 @@ dependencies = [
  "ink 5.1.1",
  "ink_e2e",
  "parity-scale-codec",
+ "propchain-contracts",
  "propchain-traits",
  "scale-info",
 ]
