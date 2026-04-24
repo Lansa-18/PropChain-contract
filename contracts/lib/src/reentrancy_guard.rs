@@ -9,7 +9,7 @@ pub enum ReentrancyError {
 }
 
 /// Simple mutex-based reentrancy guard (OpenZeppelin-style)
-/// 
+///
 /// This guard prevents reentrancy attacks by tracking whether we're currently
 /// in the middle of a protected operation. If a reentrancy attempt is detected,
 /// the guard returns an error.
@@ -23,7 +23,10 @@ pub enum ReentrancyError {
 /// })
 /// ```
 #[derive(Default, Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
-#[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
 pub struct ReentrancyGuard {
     locked: bool,
 }
@@ -35,7 +38,7 @@ impl ReentrancyGuard {
     }
 
     /// Enter a protected section
-    /// 
+    ///
     /// Returns Ok(()) if we're not currently locked, or Err(ReentrancyError::ReentrantCall)
     /// if a reentrancy attempt is detected.
     pub fn enter(&mut self) -> Result<(), ReentrancyError> {
@@ -47,7 +50,7 @@ impl ReentrancyGuard {
     }
 
     /// Exit a protected section
-    /// 
+    ///
     /// This must always be called after enter(), typically via the non_reentrant! macro.
     pub fn exit(&mut self) {
         self.locked = false;
@@ -60,7 +63,7 @@ impl ReentrancyGuard {
 }
 
 /// Macro to simplify reentrancy protection usage
-/// 
+///
 /// # Example
 /// ```ignore
 /// #[ink(message)]
@@ -76,7 +79,7 @@ impl ReentrancyGuard {
 ///         
 ///         // Update state after transfer
 ///         self.balance -= amount;
-///         self.emit_event(); 
+///         self.emit_event();
 ///         
 ///         Ok(())
 ///     })

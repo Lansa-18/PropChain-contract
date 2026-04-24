@@ -2,9 +2,9 @@
 
 use ink::prelude::vec::Vec;
 use ink::storage::Mapping;
+use propchain_contracts::{non_reentrant, ReentrancyError, ReentrancyGuard};
 use propchain_traits::ComplianceChecker;
 use propchain_traits::*;
-use propchain_contracts::{non_reentrant, ReentrancyError, ReentrancyGuard};
 
 #[ink::contract]
 mod tax_compliance {
@@ -407,9 +407,9 @@ mod tax_compliance {
                     .get((property_id, jurisdiction.code))
                     .ok_or(Error::AssessmentNotFound)?;
                 let reporting_period = self.reporting_period(now, rule.reporting_frequency);
-                let existing = self
-                    .tax_records
-                    .get((property_id, jurisdiction.code, reporting_period));
+                let existing =
+                    self.tax_records
+                        .get((property_id, jurisdiction.code, reporting_period));
                 let combined_exemption = rule
                     .exemption_amount
                     .saturating_add(assessment.exemption_override);
@@ -611,9 +611,9 @@ mod tax_compliance {
                     .latest_reporting_period
                     .get((property_id, jurisdiction.code))
                     .unwrap_or(self.reporting_period(now, rule.reporting_frequency));
-                let record = self
-                    .tax_records
-                    .get((property_id, jurisdiction.code, reporting_period));
+                let record =
+                    self.tax_records
+                        .get((property_id, jurisdiction.code, reporting_period));
 
                 self.log_audit(
                     property_id,

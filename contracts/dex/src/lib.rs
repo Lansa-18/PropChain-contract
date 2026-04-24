@@ -439,7 +439,9 @@ mod dex {
             amount_in: u128,
             min_quote_out: u128,
         ) -> Result<u128, Error> {
-            non_reentrant!(self, { self.swap(pair_id, OrderSide::Sell, amount_in, min_quote_out) })
+            non_reentrant!(self, {
+                self.swap(pair_id, OrderSide::Sell, amount_in, min_quote_out)
+            })
         }
 
         #[ink(message)]
@@ -449,7 +451,9 @@ mod dex {
             amount_in: u128,
             min_base_out: u128,
         ) -> Result<u128, Error> {
-            non_reentrant!(self, { self.swap(pair_id, OrderSide::Buy, amount_in, min_base_out) })
+            non_reentrant!(self, {
+                self.swap(pair_id, OrderSide::Buy, amount_in, min_base_out)
+            })
         }
 
         #[ink(message)]
@@ -590,7 +594,11 @@ mod dex {
                     return Err(Error::InvalidOrder);
                 }
 
-                let execution_price = if maker.price > 0 { maker.price } else { taker.price };
+                let execution_price = if maker.price > 0 {
+                    maker.price
+                } else {
+                    taker.price
+                };
                 let notional = fill_amount
                     .saturating_mul(execution_price)
                     .checked_div(BIPS_DENOMINATOR)
@@ -1043,8 +1051,11 @@ mod dex {
                 let caller = self.env().caller();
                 let pool = self.pool(pair_id)?;
                 let mut position = self.position(pair_id, caller);
-                let accrued =
-                    pending_from_indices(position.lp_shares, pool.reward_index, position.reward_debt);
+                let accrued = pending_from_indices(
+                    position.lp_shares,
+                    pool.reward_index,
+                    position.reward_debt,
+                );
                 let reward = position.pending_rewards.saturating_add(accrued);
                 if reward == 0 {
                     return Err(Error::RewardUnavailable);

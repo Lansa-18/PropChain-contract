@@ -1025,14 +1025,14 @@ pub mod property_token {
                 self.dividend_balance.insert((caller, token_id), &0u128);
                 match self.env().transfer(caller, owed) {
                     Ok(_) => {
-                        let mut rec = self
-                            .tax_records
-                            .get((caller, token_id))
-                            .unwrap_or(TaxRecord {
-                                dividends_received: 0,
-                                shares_sold: 0,
-                                proceeds: 0,
-                            });
+                        let mut rec =
+                            self.tax_records
+                                .get((caller, token_id))
+                                .unwrap_or(TaxRecord {
+                                    dividends_received: 0,
+                                    shares_sold: 0,
+                                    proceeds: 0,
+                                });
                         rec.dividends_received = rec.dividends_received.saturating_add(owed);
                         self.tax_records.insert((caller, token_id), &rec);
                         self.env().emit_event(DividendsWithdrawn {
@@ -1337,14 +1337,14 @@ pub mod property_token {
                     .insert((token_id, seller), &(esc.saturating_sub(amount)));
                 match self.env().transfer(seller, cost) {
                     Ok(_) => {
-                        let mut rec = self
-                            .tax_records
-                            .get((seller, token_id))
-                            .unwrap_or(TaxRecord {
-                                dividends_received: 0,
-                                shares_sold: 0,
-                                proceeds: 0,
-                            });
+                        let mut rec =
+                            self.tax_records
+                                .get((seller, token_id))
+                                .unwrap_or(TaxRecord {
+                                    dividends_received: 0,
+                                    shares_sold: 0,
+                                    proceeds: 0,
+                                });
                         rec.shares_sold = rec.shares_sold.saturating_add(amount);
                         rec.proceeds = rec.proceeds.saturating_add(cost);
                         self.tax_records.insert((seller, token_id), &rec);

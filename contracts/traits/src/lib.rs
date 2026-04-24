@@ -15,8 +15,6 @@ pub use access_control::*;
 pub use crypto::*;
 pub use di::*;
 pub use reentrancy_guard::*;
-// Export observer types explicitly to avoid name collision with event_bus::EventBus trait
-pub use observer::{EventKind, EventObserver};
 pub mod i18n;
 pub mod monitoring;
 

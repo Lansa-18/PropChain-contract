@@ -683,7 +683,8 @@ mod propchain_insurance {
             non_reentrant!(self, {
                 let caller = self.env().caller();
 
-                if caller != self.admin && !self.authorized_assessors.get(&caller).unwrap_or(false) {
+                if caller != self.admin && !self.authorized_assessors.get(&caller).unwrap_or(false)
+                {
                     return Err(InsuranceError::Unauthorized);
                 }
 
@@ -691,7 +692,8 @@ mod propchain_insurance {
                     .claims
                     .get(&claim_id)
                     .ok_or(InsuranceError::ClaimNotFound)?;
-                if claim.status != ClaimStatus::Pending && claim.status != ClaimStatus::UnderReview {
+                if claim.status != ClaimStatus::Pending && claim.status != ClaimStatus::UnderReview
+                {
                     return Err(InsuranceError::ClaimAlreadyProcessed);
                 }
 

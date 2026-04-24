@@ -3,8 +3,8 @@
 
 use ink::prelude::string::String;
 use ink::storage::Mapping;
-use propchain_traits::ComplianceChecker;
 use propchain_contracts::{non_reentrant, ReentrancyError, ReentrancyGuard};
+use propchain_traits::ComplianceChecker;
 
 #[ink::contract]
 mod property_management {
@@ -42,7 +42,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum LeaseStatus {
@@ -52,7 +58,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Lease {
@@ -70,7 +82,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum MaintenanceStatus {
@@ -82,7 +100,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct MaintenanceRequest {
@@ -99,7 +123,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum ScreeningStatus {
@@ -109,7 +139,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct TenantScreening {
@@ -126,7 +162,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum ExpenseStatus {
@@ -135,7 +177,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Expense {
@@ -151,7 +199,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum InspectionStatus {
@@ -161,7 +215,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Inspection {
@@ -177,7 +237,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct JurisdictionCompliance {
@@ -190,7 +256,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum DisputeStatus {
@@ -203,7 +275,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct DisputeCase {
@@ -219,7 +297,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct PropertyAnalytics {
@@ -233,7 +317,13 @@ mod property_management {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        scale::Encode,
+        scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct ManagementDashboard {
@@ -396,7 +486,10 @@ mod property_management {
         }
 
         #[ink(message)]
-        pub fn set_compliance_registry(&mut self, registry: Option<AccountId>) -> Result<(), Error> {
+        pub fn set_compliance_registry(
+            &mut self,
+            registry: Option<AccountId>,
+        ) -> Result<(), Error> {
             self.ensure_admin()?;
             self.compliance_registry = registry;
             Ok(())
@@ -441,7 +534,10 @@ mod property_management {
         }
 
         #[ink(message)]
-        pub fn get_jurisdiction_compliance(&self, token_id: TokenId) -> Option<JurisdictionCompliance> {
+        pub fn get_jurisdiction_compliance(
+            &self,
+            token_id: TokenId,
+        ) -> Option<JurisdictionCompliance> {
             self.legal_by_token.get(token_id)
         }
 
@@ -620,7 +716,10 @@ mod property_management {
             assigned_to: Option<AccountId>,
         ) -> Result<(), Error> {
             self.ensure_manager_or_admin()?;
-            let mut req = self.maintenance.get(request_id).ok_or(Error::MaintenanceNotFound)?;
+            let mut req = self
+                .maintenance
+                .get(request_id)
+                .ok_or(Error::MaintenanceNotFound)?;
             let was_open = matches!(
                 req.status,
                 MaintenanceStatus::Submitted
@@ -661,7 +760,10 @@ mod property_management {
             resolution_hash: Hash,
         ) -> Result<(), Error> {
             self.ensure_manager_or_admin()?;
-            let mut req = self.maintenance.get(request_id).ok_or(Error::MaintenanceNotFound)?;
+            let mut req = self
+                .maintenance
+                .get(request_id)
+                .ok_or(Error::MaintenanceNotFound)?;
             let was_open = matches!(
                 req.status,
                 MaintenanceStatus::Submitted
@@ -725,13 +827,12 @@ mod property_management {
         }
 
         #[ink(message)]
-        pub fn review_screening(
-            &mut self,
-            screening_id: u64,
-            approve: bool,
-        ) -> Result<(), Error> {
+        pub fn review_screening(&mut self, screening_id: u64, approve: bool) -> Result<(), Error> {
             self.ensure_manager_or_admin()?;
-            let mut s = self.screenings.get(screening_id).ok_or(Error::ScreeningNotFound)?;
+            let mut s = self
+                .screenings
+                .get(screening_id)
+                .ok_or(Error::ScreeningNotFound)?;
             if s.status != ScreeningStatus::Pending {
                 return Err(Error::InvalidStatus);
             }
@@ -805,7 +906,10 @@ mod property_management {
         pub fn pay_expense(&mut self, expense_id: u64) -> Result<(), Error> {
             non_reentrant!(self, {
                 self.ensure_manager_or_admin()?;
-                let mut e = self.expenses.get(expense_id).ok_or(Error::ExpenseNotFound)?;
+                let mut e = self
+                    .expenses
+                    .get(expense_id)
+                    .ok_or(Error::ExpenseNotFound)?;
                 if e.status != ExpenseStatus::Recorded {
                     return Err(Error::InvalidStatus);
                 }
@@ -959,7 +1063,10 @@ mod property_management {
 
         #[ink(message, payable)]
         pub fn counterparty_stake_dispute(&mut self, dispute_id: u64) -> Result<(), Error> {
-            let mut d = self.disputes.get(dispute_id).ok_or(Error::DisputeNotFound)?;
+            let mut d = self
+                .disputes
+                .get(dispute_id)
+                .ok_or(Error::DisputeNotFound)?;
             let caller = self.env().caller();
             if caller != d.respondent {
                 return Err(Error::RespondentMismatch);
@@ -987,7 +1094,10 @@ mod property_management {
         ) -> Result<(), Error> {
             non_reentrant!(self, {
                 self.ensure_admin()?;
-                let d = self.disputes.get(dispute_id).ok_or(Error::DisputeNotFound)?;
+                let d = self
+                    .disputes
+                    .get(dispute_id)
+                    .ok_or(Error::DisputeNotFound)?;
                 if d.status != DisputeStatus::Open {
                     return Err(Error::InvalidStatus);
                 }
@@ -1044,26 +1154,32 @@ mod property_management {
         }
 
         fn finish_dispute(&mut self, dispute_id: u64, status: DisputeStatus) -> Result<(), Error> {
-            let mut d = self.disputes.get(dispute_id).ok_or(Error::DisputeNotFound)?;
+            let mut d = self
+                .disputes
+                .get(dispute_id)
+                .ok_or(Error::DisputeNotFound)?;
             let released = d.initiator_stake.saturating_add(d.respondent_stake);
             self.dispute_escrow_locked = self.dispute_escrow_locked.saturating_sub(released);
             d.status = status.clone();
             self.disputes.insert(dispute_id, &d);
             self.global_open_disputes = self.global_open_disputes.saturating_sub(1);
-            self.env().emit_event(DisputeResolved { dispute_id, status });
+            self.env()
+                .emit_event(DisputeResolved { dispute_id, status });
             Ok(())
         }
 
         fn analytics_for(&self, token_id: TokenId) -> PropertyAnalytics {
-            self.analytics_by_token.get(token_id).unwrap_or(PropertyAnalytics {
-                rent_collected: 0,
-                maintenance_open: 0,
-                maintenance_resolved: 0,
-                expense_total: 0,
-                inspection_count: 0,
-                dispute_count: 0,
-                screening_approved: 0,
-            })
+            self.analytics_by_token
+                .get(token_id)
+                .unwrap_or(PropertyAnalytics {
+                    rent_collected: 0,
+                    maintenance_open: 0,
+                    maintenance_resolved: 0,
+                    expense_total: 0,
+                    inspection_count: 0,
+                    dispute_count: 0,
+                    screening_approved: 0,
+                })
         }
 
         fn ensure_admin(&self) -> Result<(), Error> {
@@ -1109,16 +1225,7 @@ mod property_management {
             test::set_caller::<DefaultEnvironment>(accounts.alice);
             let mut pm = setup();
             let lease_id = pm
-                .create_lease(
-                    1,
-                    accounts.bob,
-                    accounts.alice,
-                    1000,
-                    86_400,
-                    500,
-                    0,
-                    0,
-                )
+                .create_lease(1, accounts.bob, accounts.alice, 1000, 86_400, 500, 0, 0)
                 .expect("lease");
             test::set_caller::<DefaultEnvironment>(accounts.bob);
             test::set_value_transferred::<DefaultEnvironment>(1000);
@@ -1226,16 +1333,7 @@ mod property_management {
             )
             .expect("legal");
             // 10% of implied annual (1000 * 365) = 36_500 cap
-            let r = pm.create_lease(
-                9,
-                accounts.bob,
-                accounts.alice,
-                1000,
-                86_400,
-                0,
-                40_000,
-                0,
-            );
+            let r = pm.create_lease(9, accounts.bob, accounts.alice, 1000, 86_400, 0, 40_000, 0);
             assert_eq!(r, Err(Error::ComplianceViolation));
         }
 
@@ -1258,16 +1356,7 @@ mod property_management {
             )
             .expect("compliance");
             let lease_id = pm
-                .create_lease(
-                    1,
-                    accounts.bob,
-                    accounts.alice,
-                    2000,
-                    86_400,
-                    250,
-                    100,
-                    0,
-                )
+                .create_lease(1, accounts.bob, accounts.alice, 2000, 86_400, 250, 100, 0)
                 .expect("lease");
             test::set_caller::<DefaultEnvironment>(accounts.bob);
             test::set_value_transferred::<DefaultEnvironment>(2000);
@@ -1320,7 +1409,8 @@ mod property_management {
             test::set_value_transferred::<DefaultEnvironment>(50);
             pm.counterparty_stake_dispute(did).expect("stake");
             test::set_caller::<DefaultEnvironment>(accounts.alice);
-            pm.resolve_dispute(did, Some(true)).expect("resolve dispute");
+            pm.resolve_dispute(did, Some(true))
+                .expect("resolve dispute");
             assert_eq!(
                 pm.get_dispute(did).expect("d").status,
                 DisputeStatus::ResolvedInitiator
