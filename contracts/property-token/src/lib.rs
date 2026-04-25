@@ -463,6 +463,16 @@ pub mod property_token {
         pub amount: u128,
     }
 
+    // --- Supply Management Events ---
+    #[ink(event)]
+    pub struct TokenBurned {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub burned_by: AccountId,
+        pub reason: String,
+    }
+
     impl Default for PropertyToken {
         fn default() -> Self {
             Self::new()
@@ -2063,6 +2073,76 @@ pub mod property_token {
                 from: Some(caller),
                 to: None,
                 id: token_id,
+            });
+
+            Ok(())
+        }
+
+        /// Burn a token for supply management purposes.
+        ///
+        /// Only the contract admin can burn tokens. This is used for supply management,
+        /// such as removing tokens from circulation, handling regulatory requirements,
+        /// or managing tokenomics.
+        ///
+        /// # Arguments
+        /// * `token_id` - The ID of the token to burn
+        /// * `reason` - A description of why the token is being burned (for audit trail)
+        ///
+        /// # Requirements
+        /// * Caller must be the contract admin
+        /// * Token must exist
+        /// * Token must not be locked in a bridge operation
+        ///
+        /// # Effects
+        /// * Removes token from owner's balance
+        /// * Decrements total supply
+        /// * Clears all token approvals
+        /// * Emits `Transfer` event (from owner to zero address)
+        /// * Emits `TokenBurned` event with reason
+        #[ink(message)]
+        pub fn burn(&mut self, token_id: TokenId, reason: String) -> Result<(), Error> {
+            let caller = self.env().caller();
+
+            // Only admin can burn tokens
+            if caller != self.admin {
+                return Err(Error::Unauthorized);
+            }
+
+            // Check token exists
+            let token_owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+
+            // Check token is not locked in bridge
+            if self.has_pending_bridge_request(token_id) {
+                return Err(Error::BridgeLocked);
+            }
+
+            // Remove token from owner
+            self.remove_token_from_owner(token_owner, token_id)?;
+
+            // Clear token ownership
+            self.token_owner.remove(token_id);
+
+            // Clear approvals
+            self.token_approvals.remove(token_id);
+
+            // Clear balances
+            self.balances.insert((&token_owner, &token_id), &0u128);
+
+            // Decrement total supply
+            self.total_supply = self.total_supply.saturating_sub(1);
+
+            // Emit Transfer event (to zero address indicates burn)
+            self.env().emit_event(Transfer {
+                from: Some(token_owner),
+                to: None,
+                id: token_id,
+            });
+
+            // Emit TokenBurned event with reason for audit trail
+            self.env().emit_event(TokenBurned {
+                token_id,
+                burned_by: caller,
+                reason,
             });
 
             Ok(())
