@@ -199,6 +199,18 @@ mod propchain_crowdfunding {
         Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct CampaignUpdate {
+        pub update_id: u64,
+        pub campaign_id: u64,
+        pub creator: AccountId,
+        pub content: String,
+        pub timestamp: u64,
+    }
+
+    #[derive(
+        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct RiskProfile {
         pub campaign_id: u64,
         pub ltv_ratio: u32,
@@ -230,6 +242,8 @@ mod propchain_crowdfunding {
         authorized_oracles: Mapping<AccountId, bool>,
         /// Tracks whether an investor has been refunded for a campaign
         refunds_issued: Mapping<(u64, AccountId), bool>,
+        campaign_update_counts: Mapping<u64, u64>,
+        campaign_updates: Mapping<(u64, u64), CampaignUpdate>,
     }
 
     #[ink(event)]
@@ -290,6 +304,17 @@ mod propchain_crowdfunding {
         #[ink(topic)]
         investor: AccountId,
         amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct CampaignUpdatePosted {
+        #[ink(topic)]
+        campaign_id: u64,
+        #[ink(topic)]
+        update_id: u64,
+        #[ink(topic)]
+        creator: AccountId,
+        timestamp: u64,
     }
 
     impl RealEstateCrowdfunding {
@@ -443,6 +468,55 @@ mod propchain_crowdfunding {
             };
             self.milestones.insert(self.milestone_count, &milestone);
             Ok(self.milestone_count)
+        }
+
+        #[ink(message)]
+        pub fn post_update(
+            &mut self,
+            campaign_id: u64,
+            content: String,
+        ) -> Result<u64, CrowdfundingError> {
+            let mut campaign = self
+                .campaigns
+                .get(campaign_id)
+                .ok_or(CrowdfundingError::CampaignNotFound)?;
+            if self.env().caller() != campaign.creator {
+                return Err(CrowdfundingError::Unauthorized);
+            }
+            if campaign.status == CampaignStatus::Cancelled {
+                return Err(CrowdfundingError::CampaignNotActive);
+            }
+            let update_count = self.campaign_update_counts.get(campaign_id).unwrap_or(0) + 1;
+            self.campaign_update_counts.insert(campaign_id, &update_count);
+            let update = CampaignUpdate {
+                update_id: update_count,
+                campaign_id,
+                creator: self.env().caller(),
+                content,
+                timestamp: self.env().block_timestamp(),
+            };
+            self.campaign_updates.insert((campaign_id, update_count), &update);
+            self.env().emit_event(CampaignUpdatePosted {
+                campaign_id,
+                update_id: update_count,
+                creator: self.env().caller(),
+                timestamp: update.timestamp,
+            });
+            Ok(update_count)
+        }
+
+        #[ink(message)]
+        pub fn get_update_count(&self, campaign_id: u64) -> u64 {
+            self.campaign_update_counts.get(campaign_id).unwrap_or(0)
+        }
+
+        #[ink(message)]
+        pub fn get_campaign_update(
+            &self,
+            campaign_id: u64,
+            update_id: u64,
+        ) -> Option<CampaignUpdate> {
+            self.campaign_updates.get((campaign_id, update_id))
         }
 
         #[ink(message)]
@@ -856,6 +930,32 @@ mod tests {
         assert!(contract.invest(campaign_id, 100_000).is_ok());
         let campaign = contract.get_campaign(campaign_id).unwrap();
         assert_eq!(campaign.status, CampaignStatus::Funded);
+    }
+
+    #[ink::test]
+    fn test_campaign_creator_can_post_update() {
+        let mut contract = setup();
+        let campaign_id = contract.create_campaign("Sunset Villas".into(), 100_000).unwrap();
+        let update_id = contract
+            .post_update(campaign_id, "Campaign launched".into())
+            .unwrap();
+        assert_eq!(update_id, 1);
+        assert_eq!(contract.get_update_count(campaign_id), 1);
+        let update = contract.get_campaign_update(campaign_id, update_id).unwrap();
+        assert_eq!(update.creator, test::default_accounts::<DefaultEnvironment>().alice);
+        assert_eq!(update.content, "Campaign launched");
+    }
+
+    #[ink::test]
+    fn test_non_creator_cannot_post_update() {
+        let mut contract = setup();
+        let campaign_id = contract.create_campaign("Sunset Villas".into(), 100_000).unwrap();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+        assert_eq!(
+            contract.post_update(campaign_id, "Update from wrong account".into()),
+            Err(CrowdfundingError::Unauthorized)
+        );
     }
 
     #[ink::test]

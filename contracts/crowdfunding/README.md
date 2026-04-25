@@ -67,6 +67,14 @@ contract.onboard_investor("US".into(), true)?;
 contract.invest(campaign_id, 250_000)?;
 ```
 
+### Campaign Updates
+
+```rust
+let update_id = contract.post_update(campaign_id, "Project milestone reached".into())?;
+let update_count = contract.get_update_count(campaign_id);
+let update = contract.get_campaign_update(campaign_id, update_id).unwrap();
+```
+
 ### Milestone Management
 
 ```rust
