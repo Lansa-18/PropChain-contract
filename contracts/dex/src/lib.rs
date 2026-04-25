@@ -535,42 +535,50 @@ mod dex {
             requested_amount: u128,
         ) -> Result<u128, Error> {
             non_reentrant!(self, {
-                let mut order = self.order(order_id)?;
-                if !matches!(
-                    order.status,
-                    OrderStatus::Open | OrderStatus::PartiallyFilled | OrderStatus::Triggered
-                ) {
-                    return Err(Error::OrderNotExecutable);
-                }
-
-                let executable = self.is_order_executable(&order)?;
-                if !executable {
-                    return Err(Error::OrderNotExecutable);
-                }
-
-                let fill_amount = core::cmp::min(requested_amount, order.remaining_amount);
-                if fill_amount == 0 {
-                    return Err(Error::InvalidOrder);
-                }
-
-                let pair_id = order.pair_id;
-                let output = match order.side {
-                    OrderSide::Sell => self.swap(pair_id, OrderSide::Sell, fill_amount, 0)?,
-                    OrderSide::Buy => self.swap(pair_id, OrderSide::Buy, fill_amount, 0)?,
-                };
-
-                order.remaining_amount = order.remaining_amount.saturating_sub(fill_amount);
-                order.updated_at = self.env().block_timestamp();
-                order.status = if order.remaining_amount == 0 {
-                    OrderStatus::Filled
-                } else {
-                    OrderStatus::PartiallyFilled
-                };
-                self.orders.insert(order_id, &order);
-                self.refresh_best_quotes(pair_id);
-
-                Ok(output)
+                self.execute_order_core(order_id, requested_amount)
             })
+        }
+
+        fn execute_order_core(
+            &mut self,
+            order_id: u64,
+            requested_amount: u128,
+        ) -> Result<u128, Error> {
+            let mut order = self.order(order_id)?;
+            if !matches!(
+                order.status,
+                OrderStatus::Open | OrderStatus::PartiallyFilled | OrderStatus::Triggered
+            ) {
+                return Err(Error::OrderNotExecutable);
+            }
+
+            let executable = self.is_order_executable(&order)?;
+            if !executable {
+                return Err(Error::OrderNotExecutable);
+            }
+
+            let fill_amount = core::cmp::min(requested_amount, order.remaining_amount);
+            if fill_amount == 0 {
+                return Err(Error::InvalidOrder);
+            }
+
+            let pair_id = order.pair_id;
+            let output = match order.side {
+                OrderSide::Sell => self.swap(pair_id, OrderSide::Sell, fill_amount, 0)?,
+                OrderSide::Buy => self.swap(pair_id, OrderSide::Buy, fill_amount, 0)?,
+            };
+
+            order.remaining_amount = order.remaining_amount.saturating_sub(fill_amount);
+            order.updated_at = self.env().block_timestamp();
+            order.status = if order.remaining_amount == 0 {
+                OrderStatus::Filled
+            } else {
+                OrderStatus::PartiallyFilled
+            };
+            self.orders.insert(order_id, &order);
+            self.refresh_best_quotes(pair_id);
+
+            Ok(output)
         }
 
         #[ink(message)]
@@ -765,6 +773,9 @@ mod dex {
             non_reentrant!(self, {
                 if self.env().caller() != self.admin {
                     return Err(Error::Unauthorized);
+                }
+                if self.admin_timelock_delay > 0 {
+                    return Err(Error::TimelockRequired);
                 }
                 self.liquidity_mining = LiquidityMiningCampaign {
                     emission_rate,
@@ -1155,6 +1166,11 @@ mod dex {
                 let passed = proposal.votes_for > proposal.votes_against;
                 proposal.executed = true;
                 self.governance_proposals.insert(proposal_id, &proposal);
+                if passed {
+                    if let Some(new_fee) = proposal.new_fee_bips {
+                        self.apply_fee_to_all_pools(new_fee)?;
+                    }
+                }
                 Ok(passed)
             })
         }
@@ -1999,7 +2015,6 @@ mod dex {
             Ok(())
         }
 
-        #[allow(dead_code)]
         fn apply_fee_to_all_pools(&mut self, new_fee_bips: u32) -> Result<(), Error> {
             if new_fee_bips >= 1_000 {
                 return Err(Error::InvalidPair);
@@ -2108,9 +2123,7 @@ mod dex {
                         OrderStatus::Open | OrderStatus::PartiallyFilled
                     )
                 {
-                    // Execute the order with its remaining amount
-                    // Ignore errors from individual order executions to continue processing others
-                    let _ = self.execute_order(order_id, order.remaining_amount);
+                    let _ = self.execute_order_core(order_id, order.remaining_amount);
                 }
             }
 
