@@ -32,13 +32,8 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
+        Debug, Clone, Copy, PartialEq, Eq,
+        scale::Encode, scale::Decode,
         ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -51,13 +46,8 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
+        Debug, Clone, Copy, PartialEq, Eq,
+        scale::Encode, scale::Decode,
         ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -68,13 +58,8 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
+        Debug, Clone, Copy, PartialEq, Eq,
+        scale::Encode, scale::Decode,
         ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -85,13 +70,8 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
+        Debug, Clone, Copy, PartialEq, Eq,
+        scale::Encode, scale::Decode,
         ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -102,13 +82,8 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        scale::Encode,
-        scale::Decode,
+        Debug, Clone, Copy, PartialEq, Eq,
+        scale::Encode, scale::Decode,
         ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -120,7 +95,9 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug, Clone, PartialEq,
+        scale::Encode, scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Campaign {
@@ -134,7 +111,9 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug, Clone, PartialEq,
+        scale::Encode, scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct InvestorProfile {
@@ -145,7 +124,9 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug, Clone, PartialEq,
+        scale::Encode, scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Milestone {
@@ -157,7 +138,9 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug, Clone, PartialEq,
+        scale::Encode, scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Proposal {
@@ -170,7 +153,9 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug, Clone, PartialEq,
+        scale::Encode, scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct ShareListing {
@@ -182,7 +167,9 @@ mod propchain_crowdfunding {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+        Debug, Clone, PartialEq,
+        scale::Encode, scale::Decode,
+        ink::storage::traits::StorageLayout,
     )]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct RiskProfile {
@@ -193,11 +180,47 @@ mod propchain_crowdfunding {
         pub rating: RiskRating,
     }
 
+    // ── Search & Discovery Types ─────────────────────────────
+
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct CampaignFilter {
+        /// Optional status to match (None = any)
+        pub status: Option<CampaignStatus>,
+        /// Keyword that must appear in the title (case-insensitive, None = any)
+        pub title_keyword: Option<String>,
+        /// Minimum target amount (None = no minimum)
+        pub min_target: Option<u128>,
+        /// Maximum target amount (None = no maximum)
+        pub max_target: Option<u128>,
+        /// Minimum funding percentage 0-100 (None = no minimum)
+        pub min_funded_pct: Option<u32>,
+        /// Only show fully funded campaigns
+        pub funded_only: bool,
+    }
+
+    #[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct CampaignSummary {
+        pub campaign_id: u64,
+        pub creator: AccountId,
+        pub title: String,
+        pub target_amount: u128,
+        pub raised_amount: u128,
+        pub funded_pct: u32,
+        pub status: CampaignStatus,
+        pub investor_count: u32,
+        pub risk_rating: RiskRating,
+    }
+
+    // ── Storage ──────────────────────────────────────────────
+
     #[ink(storage)]
     pub struct RealEstateCrowdfunding {
         admin: AccountId,
         campaigns: Mapping<u64, Campaign>,
         campaign_count: u64,
+        campaign_ids: Vec<u64>,                          // index for iteration
         investor_profiles: Mapping<AccountId, InvestorProfile>,
         investments: Mapping<(u64, AccountId), u128>,
         milestones: Mapping<u64, Milestone>,
@@ -212,6 +235,8 @@ mod propchain_crowdfunding {
         risk_profiles: Mapping<u64, RiskProfile>,
         blocked_jurisdictions: Vec<String>,
     }
+
+    // ── Events ───────────────────────────────────────────────
 
     #[ink(event)]
     pub struct CampaignCreated {
@@ -255,6 +280,8 @@ mod propchain_crowdfunding {
         shares: u64,
     }
 
+    // ── Implementation ───────────────────────────────────────
+
     impl RealEstateCrowdfunding {
         #[ink(constructor)]
         pub fn new(admin: AccountId) -> Self {
@@ -262,6 +289,7 @@ mod propchain_crowdfunding {
                 admin,
                 campaigns: Mapping::default(),
                 campaign_count: 0,
+                campaign_ids: Vec::new(),
                 investor_profiles: Mapping::default(),
                 investments: Mapping::default(),
                 milestones: Mapping::default(),
@@ -277,6 +305,8 @@ mod propchain_crowdfunding {
                 blocked_jurisdictions: Vec::new(),
             }
         }
+
+        // ── Core Campaign Messages ───────────────────────────
 
         #[ink(message)]
         pub fn create_campaign(
@@ -295,6 +325,7 @@ mod propchain_crowdfunding {
                 investor_count: 0,
             };
             self.campaigns.insert(self.campaign_count, &campaign);
+            self.campaign_ids.push(self.campaign_count);
             self.env().emit_event(CampaignCreated {
                 campaign_id: self.campaign_count,
                 creator: self.env().caller(),
@@ -358,8 +389,7 @@ mod propchain_crowdfunding {
             if current == 0 {
                 campaign.investor_count += 1;
             }
-            self.investments
-                .insert((campaign_id, caller), &(current + amount));
+            self.investments.insert((campaign_id, caller), &(current + amount));
             campaign.raised_amount += amount;
             if campaign.raised_amount >= campaign.target_amount {
                 campaign.status = CampaignStatus::Funded;
@@ -367,8 +397,7 @@ mod propchain_crowdfunding {
             self.campaigns.insert(campaign_id, &campaign);
             let shares = (amount / 1000) as u64;
             let current_shares = self.share_holdings.get((campaign_id, caller)).unwrap_or(0);
-            self.share_holdings
-                .insert((campaign_id, caller), &(current_shares + shares));
+            self.share_holdings.insert((campaign_id, caller), &(current_shares + shares));
             self.env().emit_event(InvestmentMade {
                 campaign_id,
                 investor: caller,
@@ -578,10 +607,8 @@ mod propchain_crowdfunding {
                 .share_holdings
                 .get((listing.campaign_id, buyer))
                 .unwrap_or(0);
-            self.share_holdings.insert(
-                (listing.campaign_id, buyer),
-                &(buyer_shares + listing.shares),
-            );
+            self.share_holdings
+                .insert((listing.campaign_id, buyer), &(buyer_shares + listing.shares));
             self.listings.remove(listing_id);
             Ok(total_cost)
         }
@@ -615,6 +642,8 @@ mod propchain_crowdfunding {
             Ok(())
         }
 
+        // ── Basic Getters ────────────────────────────────────
+
         #[ink(message)]
         pub fn get_campaign(&self, campaign_id: u64) -> Option<Campaign> {
             self.campaigns.get(campaign_id)
@@ -647,14 +676,182 @@ mod propchain_crowdfunding {
 
         #[ink(message)]
         pub fn get_shares(&self, campaign_id: u64, investor: AccountId) -> u64 {
-            self.share_holdings
-                .get((campaign_id, investor))
-                .unwrap_or(0)
+            self.share_holdings.get((campaign_id, investor)).unwrap_or(0)
         }
 
         #[ink(message)]
         pub fn get_admin(&self) -> AccountId {
             self.admin
+        }
+
+        // ── Search & Discovery ───────────────────────────────
+
+        fn campaign_to_summary(&self, campaign: &Campaign) -> CampaignSummary {
+            let funded_pct = if campaign.target_amount == 0 {
+                0u32
+            } else {
+                ((campaign.raised_amount * 100) / campaign.target_amount) as u32
+            };
+            let risk_rating = self
+                .risk_profiles
+                .get(campaign.campaign_id)
+                .map(|r| r.rating)
+                .unwrap_or(RiskRating::Unrated);
+            CampaignSummary {
+                campaign_id: campaign.campaign_id,
+                creator: campaign.creator,
+                title: campaign.title.clone(),
+                target_amount: campaign.target_amount,
+                raised_amount: campaign.raised_amount,
+                funded_pct,
+                status: campaign.status,
+                investor_count: campaign.investor_count,
+                risk_rating,
+            }
+        }
+
+        fn matches_filter(summary: &CampaignSummary, filter: &CampaignFilter) -> bool {
+            if let Some(ref status) = filter.status {
+                if &summary.status != status {
+                    return false;
+                }
+            }
+            if let Some(ref keyword) = filter.title_keyword {
+                if !summary.title.to_lowercase().contains(&keyword.to_lowercase()) {
+                    return false;
+                }
+            }
+            if let Some(min) = filter.min_target {
+                if summary.target_amount < min {
+                    return false;
+                }
+            }
+            if let Some(max) = filter.max_target {
+                if summary.target_amount > max {
+                    return false;
+                }
+            }
+            if let Some(min_pct) = filter.min_funded_pct {
+                if summary.funded_pct < min_pct {
+                    return false;
+                }
+            }
+            if filter.funded_only && summary.status != CampaignStatus::Funded {
+                return false;
+            }
+            true
+        }
+
+        /// Browse all campaigns page by page. `page` is 0-indexed, max page_size is 50.
+        #[ink(message)]
+        pub fn get_campaigns_paginated(&self, page: u64, page_size: u64) -> Vec<CampaignSummary> {
+            let page_size = page_size.min(50);
+            let start = (page * page_size) as usize;
+            self.campaign_ids
+                .iter()
+                .skip(start)
+                .take(page_size as usize)
+                .filter_map(|id| self.campaigns.get(*id))
+                .map(|c| self.campaign_to_summary(&c))
+                .collect()
+        }
+
+        /// Filter campaigns by status, title keyword, amount range, or funded %.
+        /// Returns up to `limit` results (max 50).
+        #[ink(message)]
+        pub fn search_campaigns(&self, filter: CampaignFilter, limit: u64) -> Vec<CampaignSummary> {
+            let limit = limit.min(50) as usize;
+            self.campaign_ids
+                .iter()
+                .filter_map(|id| self.campaigns.get(*id))
+                .map(|c| self.campaign_to_summary(&c))
+                .filter(|s| Self::matches_filter(s, &filter))
+                .take(limit)
+                .collect()
+        }
+
+        /// All campaigns created by a specific account.
+        #[ink(message)]
+        pub fn get_campaigns_by_creator(&self, creator: AccountId) -> Vec<CampaignSummary> {
+            self.campaign_ids
+                .iter()
+                .filter_map(|id| self.campaigns.get(*id))
+                .filter(|c| c.creator == creator)
+                .map(|c| self.campaign_to_summary(&c))
+                .collect()
+        }
+
+        /// Top N campaigns sorted by raised_amount descending (trending / most funded).
+        #[ink(message)]
+        pub fn get_top_campaigns(&self, n: u64) -> Vec<CampaignSummary> {
+            let n = n.min(50) as usize;
+            let mut summaries: Vec<CampaignSummary> = self.campaign_ids
+                .iter()
+                .filter_map(|id| self.campaigns.get(*id))
+                .map(|c| self.campaign_to_summary(&c))
+                .collect();
+            summaries.sort_by(|a, b| b.raised_amount.cmp(&a.raised_amount));
+            summaries.into_iter().take(n).collect()
+        }
+
+        /// All campaigns matching a specific risk rating.
+        #[ink(message)]
+        pub fn get_campaigns_by_risk(&self, rating: RiskRating) -> Vec<CampaignSummary> {
+            self.campaign_ids
+                .iter()
+                .filter_map(|id| self.campaigns.get(*id))
+                .map(|c| self.campaign_to_summary(&c))
+                .filter(|s| s.risk_rating == rating)
+                .collect()
+        }
+
+        /// Active campaigns at or above `threshold_pct`% funded. Good for "closing soon".
+        #[ink(message)]
+        pub fn get_near_funded_campaigns(&self, threshold_pct: u32) -> Vec<CampaignSummary> {
+            self.campaign_ids
+                .iter()
+                .filter_map(|id| self.campaigns.get(*id))
+                .map(|c| self.campaign_to_summary(&c))
+                .filter(|s| s.status == CampaignStatus::Active && s.funded_pct >= threshold_pct)
+                .collect()
+        }
+
+        /// Campaign counts by status: (draft, active, funded, closed, cancelled).
+        #[ink(message)]
+        pub fn get_campaign_stats(&self) -> (u64, u64, u64, u64, u64) {
+            let (mut draft, mut active, mut funded, mut closed, mut cancelled) =
+                (0u64, 0u64, 0u64, 0u64, 0u64);
+            for id in self.campaign_ids.iter() {
+                if let Some(c) = self.campaigns.get(*id) {
+                    match c.status {
+                        CampaignStatus::Draft => draft += 1,
+                        CampaignStatus::Active => active += 1,
+                        CampaignStatus::Funded => funded += 1,
+                        CampaignStatus::Closed => closed += 1,
+                        CampaignStatus::Cancelled => cancelled += 1,
+                    }
+                }
+            }
+            (draft, active, funded, closed, cancelled)
+        }
+
+        /// All campaigns an investor has contributed to.
+        #[ink(message)]
+        pub fn get_investor_campaigns(&self, investor: AccountId) -> Vec<CampaignSummary> {
+            self.campaign_ids
+                .iter()
+                .filter_map(|id| {
+                    let invested = self.investments.get((*id, investor)).unwrap_or(0);
+                    if invested > 0 { self.campaigns.get(*id) } else { None }
+                })
+                .map(|c| self.campaign_to_summary(&c))
+                .collect()
+        }
+
+        /// Total number of campaigns ever created.
+        #[ink(message)]
+        pub fn get_campaign_count(&self) -> u64 {
+            self.campaign_count
         }
     }
 
@@ -671,13 +868,17 @@ pub use crate::propchain_crowdfunding::{CrowdfundingError, RealEstateCrowdfundin
 mod tests {
     use super::*;
     use ink::env::{test, DefaultEnvironment};
-    use propchain_crowdfunding::{CampaignStatus, CrowdfundingError, RealEstateCrowdfunding};
+    use propchain_crowdfunding::{
+        CampaignFilter, CampaignStatus, CrowdfundingError, RiskRating, RealEstateCrowdfunding,
+    };
 
     fn setup() -> RealEstateCrowdfunding {
         let accounts = test::default_accounts::<DefaultEnvironment>();
         test::set_caller::<DefaultEnvironment>(accounts.alice);
         RealEstateCrowdfunding::new(accounts.alice)
     }
+
+    // ── Original tests ───────────────────────────────────────
 
     #[ink::test]
     fn test_create_campaign() {
@@ -777,5 +978,141 @@ mod tests {
         assert!(contract.assess_risk(campaign_id, 50, 80, 10).is_ok());
         let profile = contract.get_risk_profile(campaign_id).unwrap();
         assert_eq!(profile.rating, propchain_crowdfunding::RiskRating::Low);
+    }
+
+    // ── Search & Discovery tests ─────────────────────────────
+
+    #[ink::test]
+    fn test_search_by_status() {
+        let mut contract = setup();
+        contract.create_campaign("Alpha".into(), 100_000).unwrap();
+        let id2 = contract.create_campaign("Beta".into(), 200_000).unwrap();
+        contract.activate_campaign(id2).unwrap();
+
+        let filter = CampaignFilter {
+            status: Some(CampaignStatus::Active),
+            title_keyword: None,
+            min_target: None,
+            max_target: None,
+            min_funded_pct: None,
+            funded_only: false,
+        };
+        let results = contract.search_campaigns(filter, 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Beta");
+    }
+
+    #[ink::test]
+    fn test_search_by_title_keyword() {
+        let mut contract = setup();
+        contract.create_campaign("Downtown Lofts".into(), 100_000).unwrap();
+        contract.create_campaign("Harbor View".into(), 200_000).unwrap();
+
+        let filter = CampaignFilter {
+            status: None,
+            title_keyword: Some("downtown".into()),
+            min_target: None,
+            max_target: None,
+            min_funded_pct: None,
+            funded_only: false,
+        };
+        let results = contract.search_campaigns(filter, 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Downtown Lofts");
+    }
+
+    #[ink::test]
+    fn test_top_campaigns_sorted() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        let id1 = contract.create_campaign("Small".into(), 100_000).unwrap();
+        let id2 = contract.create_campaign("Large".into(), 500_000).unwrap();
+        contract.activate_campaign(id1).unwrap();
+        contract.activate_campaign(id2).unwrap();
+
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+        contract.onboard_investor("US".into(), true).unwrap();
+        contract.invest(id1, 20_000).unwrap();
+        contract.invest(id2, 300_000).unwrap();
+
+        let top = contract.get_top_campaigns(2);
+        assert_eq!(top[0].campaign_id, id2);
+    }
+
+    #[ink::test]
+    fn test_near_funded_campaigns() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        let id = contract.create_campaign("Almost There".into(), 100_000).unwrap();
+        contract.activate_campaign(id).unwrap();
+
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+        contract.onboard_investor("US".into(), true).unwrap();
+        contract.invest(id, 90_000).unwrap();
+
+        let near = contract.get_near_funded_campaigns(80);
+        assert_eq!(near.len(), 1);
+        assert_eq!(near[0].funded_pct, 90);
+    }
+
+    #[ink::test]
+    fn test_get_campaign_stats() {
+        let mut contract = setup();
+        contract.create_campaign("One".into(), 100_000).unwrap();
+        let id2 = contract.create_campaign("Two".into(), 200_000).unwrap();
+        contract.activate_campaign(id2).unwrap();
+
+        let (draft, active, funded, closed, cancelled) = contract.get_campaign_stats();
+        assert_eq!(draft, 1);
+        assert_eq!(active, 1);
+        assert_eq!(funded, 0);
+        assert_eq!(closed, 0);
+        assert_eq!(cancelled, 0);
+    }
+
+    #[ink::test]
+    fn test_investor_portfolio_discovery() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        let id1 = contract.create_campaign("A".into(), 100_000).unwrap();
+        let id2 = contract.create_campaign("B".into(), 100_000).unwrap();
+        contract.activate_campaign(id1).unwrap();
+        contract.activate_campaign(id2).unwrap();
+
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+        contract.onboard_investor("US".into(), true).unwrap();
+        contract.invest(id1, 10_000).unwrap();
+
+        let portfolio = contract.get_investor_campaigns(accounts.bob);
+        assert_eq!(portfolio.len(), 1);
+        assert_eq!(portfolio[0].campaign_id, id1);
+    }
+
+    #[ink::test]
+    fn test_paginated_listing() {
+        let mut contract = setup();
+        for i in 0..5u64 {
+            contract.create_campaign(ink::prelude::format!("Campaign {}", i), 100_000).unwrap();
+        }
+        let page0 = contract.get_campaigns_paginated(0, 3);
+        let page1 = contract.get_campaigns_paginated(1, 3);
+        assert_eq!(page0.len(), 3);
+        assert_eq!(page1.len(), 2);
+    }
+
+    #[ink::test]
+    fn test_campaigns_by_risk() {
+        let mut contract = setup();
+        let id = contract.create_campaign("Low Risk".into(), 100_000).unwrap();
+        contract.assess_risk(id, 50, 80, 10).unwrap(); // Low
+
+        let results = contract.get_campaigns_by_risk(RiskRating::Low);
+        assert_eq!(results.len(), 1);
+
+        let results = contract.get_campaigns_by_risk(RiskRating::High);
+        assert_eq!(results.len(), 0);
     }
 }
