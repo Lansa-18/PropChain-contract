@@ -417,7 +417,7 @@ pub mod property_token {
         #[ink(topic)]
         pub staker: AccountId,
         pub amount: u128,
-        pub lock_period: ShareLockPeriod,
+        pub lock_period: LockPeriod,
         pub lock_until: u64,
     }
 
@@ -2630,7 +2630,7 @@ pub mod property_token {
             &mut self,
             token_id: TokenId,
             amount: u128,
-            lock_period: ShareLockPeriod,
+            lock_period: LockPeriod,
         ) -> Result<(), Error> {
             if amount == 0 {
                 return Err(Error::InvalidAmount);
@@ -2825,6 +2825,7 @@ pub mod property_token {
         // ── Staking private helpers (Issue #197) ──────────────────────────
 
         const STAKE_SCALING: u128 = 1_000_000_000_000;
+        const REWARD_RATE_PRECISION: u128 = 10_000; // Basis points precision
 
         fn update_stake_acc_reward(&mut self, token_id: TokenId) {
             let total = self.share_total_staked.get(token_id).unwrap_or(0);
@@ -2839,7 +2840,7 @@ pub mod property_token {
             }
             let rate = self.share_reward_rate_bps.get(token_id).unwrap_or(0);
             let reward = total.saturating_mul(rate).saturating_mul(blocks)
-                / REWARD_RATE_PRECISION
+                / Self::REWARD_RATE_PRECISION
                 / 5_256_000;
             let acc = self.share_acc_reward_per_share.get(token_id).unwrap_or(0);
             self.share_acc_reward_per_share.insert(
