@@ -7398,9 +7398,8 @@ dependencies = [
 
 [[package]]
 name = "soroban-sdk-macros"
-version = "21.7.7"
+version = "22.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0974e413731aeff2443f2305b344578b3f1ffd18335a7ba0f0b5d2eb4e94c9ce"
 dependencies = [
  "crate-git-revision",
  "darling 0.20.11",
