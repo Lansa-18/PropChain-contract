@@ -207,6 +207,21 @@ mod propchain_crowdfunding {
         pub rating: RiskRating,
     }
 
+    #[derive(
+        Debug, Clone, PartialEq, scale::Encode, scale::Decode, ink::storage::traits::StorageLayout,
+    )]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct CampaignSuccessMetrics {
+        pub campaign_id: u64,
+        pub funding_progress_bps: u32,
+        pub investor_count: u32,
+        pub average_investment: u128,
+        pub total_milestones: u32,
+        pub released_milestones: u32,
+        pub released_capital: u128,
+        pub is_funded: bool,
+    }
+
     #[ink(storage)]
     pub struct RealEstateCrowdfunding {
         admin: AccountId,
@@ -224,6 +239,9 @@ mod propchain_crowdfunding {
         listings: Mapping<u64, ShareListing>,
         listing_count: u64,
         risk_profiles: Mapping<u64, RiskProfile>,
+        campaign_milestone_counts: Mapping<u64, u32>,
+        released_milestone_counts: Mapping<u64, u32>,
+        released_capital: Mapping<u64, u128>,
         blocked_jurisdictions: Vec<String>,
         reentrancy_guard: propchain_traits::ReentrancyGuard,
         /// Authorized oracle accounts for milestone verification
@@ -311,6 +329,9 @@ mod propchain_crowdfunding {
                 listings: Mapping::default(),
                 listing_count: 0,
                 risk_profiles: Mapping::default(),
+                campaign_milestone_counts: Mapping::default(),
+                released_milestone_counts: Mapping::default(),
+                released_capital: Mapping::default(),
                 blocked_jurisdictions: Vec::new(),
                 reentrancy_guard: propchain_traits::ReentrancyGuard::new(),
                 authorized_oracles: Mapping::default(),
@@ -442,6 +463,9 @@ mod propchain_crowdfunding {
                 oracle_data_hash: None,
             };
             self.milestones.insert(self.milestone_count, &milestone);
+            let total_milestones = self.campaign_milestone_counts.get(campaign_id).unwrap_or(0) + 1;
+            self.campaign_milestone_counts
+                .insert(campaign_id, &total_milestones);
             Ok(self.milestone_count)
         }
 
@@ -478,6 +502,20 @@ mod propchain_crowdfunding {
                 }
                 milestone.status = MilestoneStatus::Released;
                 self.milestones.insert(milestone_id, &milestone);
+                let released_count = self
+                    .released_milestone_counts
+                    .get(milestone.campaign_id)
+                    .unwrap_or(0)
+                    + 1;
+                self.released_milestone_counts
+                    .insert(milestone.campaign_id, &released_count);
+                let released_capital = self
+                    .released_capital
+                    .get(milestone.campaign_id)
+                    .unwrap_or(0)
+                    + milestone.release_amount;
+                self.released_capital
+                    .insert(milestone.campaign_id, &released_capital);
                 Ok(())
             })
         }
@@ -788,6 +826,35 @@ mod propchain_crowdfunding {
         }
 
         #[ink(message)]
+        pub fn get_campaign_success_metrics(
+            &self,
+            campaign_id: u64,
+        ) -> Option<CampaignSuccessMetrics> {
+            let campaign = self.campaigns.get(campaign_id)?;
+            let funding_progress_bps = if campaign.target_amount == 0 {
+                0
+            } else {
+                ((campaign.raised_amount.saturating_mul(10_000)) / campaign.target_amount) as u32
+            };
+            let average_investment = if campaign.investor_count == 0 {
+                0
+            } else {
+                campaign.raised_amount / campaign.investor_count as u128
+            };
+
+            Some(CampaignSuccessMetrics {
+                campaign_id,
+                funding_progress_bps,
+                investor_count: campaign.investor_count,
+                average_investment,
+                total_milestones: self.campaign_milestone_counts.get(campaign_id).unwrap_or(0),
+                released_milestones: self.released_milestone_counts.get(campaign_id).unwrap_or(0),
+                released_capital: self.released_capital.get(campaign_id).unwrap_or(0),
+                is_funded: campaign.status == CampaignStatus::Funded,
+            })
+        }
+
+        #[ink(message)]
         pub fn get_shares(&self, campaign_id: u64, investor: AccountId) -> u64 {
             self.share_holdings
                 .get((campaign_id, investor))
@@ -1021,5 +1088,43 @@ mod tests {
         assert!(contract.assess_risk(campaign_id, 50, 80, 10).is_ok());
         let profile = contract.get_risk_profile(campaign_id).unwrap();
         assert_eq!(profile.rating, propchain_crowdfunding::RiskRating::Low);
+    }
+
+    #[ink::test]
+    fn test_campaign_success_metrics_track_funding_and_milestones() {
+        let mut contract = setup();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        let campaign_id = contract
+            .create_campaign("Metrics Campaign".into(), 200_000)
+            .unwrap();
+        contract.activate_campaign(campaign_id).unwrap();
+
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+        contract.onboard_investor("US".into(), true).unwrap();
+        contract.invest(campaign_id, 50_000).unwrap();
+
+        test::set_caller::<DefaultEnvironment>(accounts.charlie);
+        contract.onboard_investor("CA".into(), true).unwrap();
+        contract.invest(campaign_id, 100_000).unwrap();
+
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+        let milestone_id = contract
+            .add_milestone(campaign_id, "Permits approved".into(), 40_000)
+            .unwrap();
+        contract.add_oracle(accounts.alice).unwrap();
+        contract
+            .oracle_verify_milestone(milestone_id, [9u8; 32])
+            .unwrap();
+        contract.approve_milestone(milestone_id).unwrap();
+        contract.release_milestone(milestone_id).unwrap();
+
+        let metrics = contract.get_campaign_success_metrics(campaign_id).unwrap();
+        assert_eq!(metrics.funding_progress_bps, 7_500);
+        assert_eq!(metrics.investor_count, 2);
+        assert_eq!(metrics.average_investment, 75_000);
+        assert_eq!(metrics.total_milestones, 1);
+        assert_eq!(metrics.released_milestones, 1);
+        assert_eq!(metrics.released_capital, 40_000);
+        assert!(!metrics.is_funded);
     }
 }
