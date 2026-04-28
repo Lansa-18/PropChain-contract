@@ -294,6 +294,274 @@ mod tests {
     }
 
     #[ink::test]
+    fn order_book_snapshot_aggregates_levels_for_visualization() {
+        let mut dex = setup_dex();
+        let pair_id = create_pool(&mut dex);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+        dex.place_order(
+            pair_id,
+            OrderSide::Sell,
+            OrderType::Limit,
+            TimeInForce::GoodTillCancelled,
+            2_100,
+            400,
+            None,
+            None,
+            false,
+        )
+        .expect("ask 1");
+        dex.place_order(
+            pair_id,
+            OrderSide::Sell,
+            OrderType::Limit,
+            TimeInForce::GoodTillCancelled,
+            2_100,
+            300,
+            None,
+            None,
+            false,
+        )
+        .expect("ask 2 same price");
+        dex.place_order(
+            pair_id,
+            OrderSide::Sell,
+            OrderType::Limit,
+            TimeInForce::GoodTillCancelled,
+            2_200,
+            100,
+            None,
+            None,
+            false,
+        )
+        .expect("ask 3");
+
+        test::set_caller::<DefaultEnvironment>(accounts.charlie);
+        dex.place_order(
+            pair_id,
+            OrderSide::Buy,
+            OrderType::Limit,
+            TimeInForce::GoodTillCancelled,
+            1_900,
+            250,
+            None,
+            None,
+            false,
+        )
+        .expect("bid 1");
+        dex.place_order(
+            pair_id,
+            OrderSide::Buy,
+            OrderType::Limit,
+            TimeInForce::GoodTillCancelled,
+            1_950,
+            500,
+            None,
+            None,
+            false,
+        )
+        .expect("bid 2");
+
+        let snapshot = dex
+            .get_order_book_snapshot(pair_id, 10)
+            .expect("snapshot should load");
+        assert_eq!(snapshot.pair_id, pair_id);
+        assert_eq!(snapshot.bids.len(), 2);
+        assert_eq!(snapshot.asks.len(), 2);
+
+        assert_eq!(snapshot.bids[0].price, 1_950);
+        assert_eq!(snapshot.bids[0].total_amount, 500);
+        assert_eq!(snapshot.bids[0].order_count, 1);
+        assert_eq!(snapshot.bids[0].cumulative_amount, 500);
+        assert_eq!(snapshot.bids[1].price, 1_900);
+        assert_eq!(snapshot.bids[1].cumulative_amount, 750);
+
+        assert_eq!(snapshot.asks[0].price, 2_100);
+        assert_eq!(snapshot.asks[0].total_amount, 700);
+        assert_eq!(snapshot.asks[0].order_count, 2);
+        assert_eq!(snapshot.asks[0].cumulative_amount, 700);
+        assert_eq!(snapshot.asks[1].price, 2_200);
+        assert_eq!(snapshot.asks[1].cumulative_amount, 800);
+
+        assert_eq!(snapshot.best_bid, 1_950);
+        assert_eq!(snapshot.best_ask, 2_100);
+        assert_eq!(snapshot.spread, 150);
+        assert_eq!(snapshot.mid_price, 2_025);
+        assert_eq!(snapshot.total_bid_depth, 750);
+        assert_eq!(snapshot.total_ask_depth, 800);
+
+        let cancel_id = dex
+            .place_order(
+                pair_id,
+                OrderSide::Buy,
+                OrderType::Limit,
+                TimeInForce::GoodTillCancelled,
+                1_800,
+                100,
+                None,
+                None,
+                false,
+            )
+            .expect("bid to cancel");
+        dex.cancel_order(cancel_id).expect("cancel should work");
+        let after_cancel = dex
+            .get_order_book_snapshot(pair_id, 10)
+            .expect("post-cancel snapshot");
+        assert_eq!(
+            after_cancel.bids.len(),
+            2,
+            "cancelled orders must not appear in the visualization"
+        );
+
+        let top = dex
+            .get_order_book_snapshot(pair_id, 1)
+            .expect("top-of-book");
+        assert_eq!(top.bids.len(), 1);
+        assert_eq!(top.asks.len(), 1);
+        assert_eq!(top.bids[0].price, 1_950);
+        assert_eq!(top.asks[0].price, 2_100);
+
+        let bids_only = dex
+            .get_order_book_levels(pair_id, OrderSide::Buy, 10)
+            .expect("bids only");
+        assert_eq!(bids_only.len(), 2);
+        assert_eq!(bids_only[0].price, 1_950);
+
+        assert_eq!(
+            dex.get_order_book_snapshot(999, 10),
+            Err(Error::PoolNotFound)
+        );
+    }
+
+    #[ink::test]
+    fn admin_timelock_blocks_direct_changes_when_enabled() {
+        let mut dex = setup_dex();
+        dex.set_admin_timelock_delay(5).expect("enable timelock");
+        assert_eq!(dex.get_admin_timelock_delay(), 5);
+
+        assert_eq!(
+            dex.configure_bridge_route(3, 111_000, 500),
+            Err(Error::TimelockRequired)
+        );
+        assert_eq!(
+            dex.set_liquidity_mining_campaign(50, 0, 1_000, String::from("GOV2")),
+            Err(Error::TimelockRequired)
+        );
+        assert_eq!(
+            dex.set_admin_timelock_delay(0),
+            Err(Error::TimelockRequired),
+            "delay change must itself route through timelock once enabled"
+        );
+    }
+
+    #[ink::test]
+    fn admin_timelock_executes_scheduled_action_after_delay() {
+        let mut dex = setup_dex();
+        dex.set_admin_timelock_delay(5).expect("enable timelock");
+
+        test::set_block_number::<DefaultEnvironment>(10);
+        let action_id = dex
+            .schedule_bridge_route_update(3, 200_000, 999)
+            .expect("schedule bridge update");
+
+        let scheduled = dex
+            .get_scheduled_admin_action(action_id)
+            .expect("action exists");
+        assert_eq!(scheduled.executable_at, 15);
+        assert_eq!(scheduled.kind, AdminActionKind::ConfigureBridgeRoute);
+        assert_eq!(scheduled.status, AdminActionStatus::Scheduled);
+
+        assert_eq!(
+            dex.execute_admin_action(action_id),
+            Err(Error::TimelockActive),
+            "execution before delay must fail"
+        );
+
+        test::set_block_number::<DefaultEnvironment>(14);
+        assert_eq!(
+            dex.execute_admin_action(action_id),
+            Err(Error::TimelockActive)
+        );
+
+        test::set_block_number::<DefaultEnvironment>(15);
+        dex.execute_admin_action(action_id)
+            .expect("execute after delay");
+
+        let quote = dex
+            .quote_cross_chain_trade(3)
+            .expect("bridge route applied");
+        assert_eq!(quote.gas_estimate, 200_000);
+        assert_eq!(quote.protocol_fee, 999);
+
+        assert_eq!(
+            dex.execute_admin_action(action_id),
+            Err(Error::AdminActionAlreadyFinalized),
+            "cannot re-execute a finalized action"
+        );
+
+        let finalized = dex
+            .get_scheduled_admin_action(action_id)
+            .expect("still retrievable");
+        assert_eq!(finalized.status, AdminActionStatus::Executed);
+    }
+
+    #[ink::test]
+    fn admin_timelock_cancel_prevents_execution() {
+        let mut dex = setup_dex();
+        dex.set_admin_timelock_delay(5).expect("enable timelock");
+        test::set_block_number::<DefaultEnvironment>(10);
+        let action_id = dex
+            .schedule_liquidity_mining_update(77, 20, 1_000, String::from("NEW"))
+            .expect("schedule");
+        dex.cancel_admin_action(action_id).expect("cancel");
+
+        test::set_block_number::<DefaultEnvironment>(30);
+        assert_eq!(
+            dex.execute_admin_action(action_id),
+            Err(Error::AdminActionAlreadyFinalized)
+        );
+
+        let action = dex
+            .get_scheduled_admin_action(action_id)
+            .expect("cancelled action retained for audit");
+        assert_eq!(action.status, AdminActionStatus::Cancelled);
+    }
+
+    #[ink::test]
+    fn admin_timelock_delay_change_requires_scheduling() {
+        let mut dex = setup_dex();
+        dex.set_admin_timelock_delay(3).expect("enable timelock");
+        test::set_block_number::<DefaultEnvironment>(100);
+
+        let action_id = dex
+            .schedule_timelock_delay_update(0)
+            .expect("schedule delay change");
+        test::set_block_number::<DefaultEnvironment>(103);
+        dex.execute_admin_action(action_id)
+            .expect("apply new delay");
+        assert_eq!(dex.get_admin_timelock_delay(), 0);
+
+        dex.configure_bridge_route(4, 10_000, 50)
+            .expect("direct path works again once delay is 0");
+    }
+
+    #[ink::test]
+    fn admin_timelock_non_admin_cannot_schedule_or_execute() {
+        let mut dex = setup_dex();
+        dex.set_admin_timelock_delay(2).expect("enable timelock");
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        test::set_caller::<DefaultEnvironment>(accounts.bob);
+        assert_eq!(
+            dex.schedule_bridge_route_update(9, 1, 1),
+            Err(Error::Unauthorized)
+        );
+        assert_eq!(dex.execute_admin_action(1), Err(Error::Unauthorized));
+        assert_eq!(dex.cancel_admin_action(1), Err(Error::Unauthorized));
+    }
+
+    #[ink::test]
     fn cross_chain_trade_and_portfolio_tracking_work() {
         let mut dex = setup_dex();
         let pair_id = create_pool(&mut dex);

@@ -107,7 +107,7 @@ pub fn start_reveal_phase(
     if current_block <= round.commit_deadline {
         return Err(CryptoError::InvalidRandomnessPhase);
     }
-    if (round.commits.len() as u32) < MIN_RANDOMNESS_PARTICIPANTS {
+    if u32::try_from(round.commits.len()).unwrap_or(u32::MAX) < MIN_RANDOMNESS_PARTICIPANTS {
         round.status = RandomnessStatus::Failed;
         return Err(CryptoError::InsufficientReveals);
     }
@@ -158,7 +158,7 @@ pub fn finalize_round(
         // Can only finalize after reveal deadline to prevent early finalization attacks
         return Err(CryptoError::InvalidRandomnessPhase);
     }
-    if (round.reveals.len() as u32) < MIN_RANDOMNESS_PARTICIPANTS {
+    if u32::try_from(round.reveals.len()).unwrap_or(u32::MAX) < MIN_RANDOMNESS_PARTICIPANTS {
         round.status = RandomnessStatus::Failed;
         return Err(CryptoError::InsufficientReveals);
     }

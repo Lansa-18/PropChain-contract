@@ -2,11 +2,15 @@
 #![allow(
     unexpected_cfgs,
     clippy::type_complexity,
-    clippy::needless_borrows_for_generic_args
+    clippy::needless_borrows_for_generic_args,
+    clippy::cast_possible_truncation,
+    clippy::arithmetic_side_effects,
+    clippy::cast_sign_loss
 )]
 
 use ink::prelude::string::String;
 use ink::storage::Mapping;
+use propchain_contracts::{non_reentrant, ReentrancyError, ReentrancyGuard};
 use propchain_traits::*;
 #[cfg(not(feature = "std"))]
 use scale_info::prelude::vec::Vec;
@@ -14,10 +18,15 @@ use scale_info::prelude::vec::Vec;
 #[ink::contract]
 pub mod property_token {
     use super::*;
-    use propchain_traits::constants::*;
 
     // Error types extracted to errors.rs (Issue #101)
     include!("errors.rs");
+
+    impl From<ReentrancyError> for Error {
+        fn from(_: ReentrancyError) -> Self {
+            Error::ReentrantCall
+        }
+    }
 
     /// Property Token contract that maintains compatibility with ERC-721 and ERC-1155
     /// while adding real estate-specific features and cross-chain support
@@ -83,17 +92,47 @@ pub mod property_token {
         /// On-chain management agent per property token (tokenized property)
         management_agent: Mapping<TokenId, AccountId>,
 
-        // Share staking (Issue #197)
-        share_stakes: Mapping<(AccountId, TokenId), ShareStakeInfo>,
-        share_total_staked: Mapping<TokenId, u128>,
-        share_reward_pool: Mapping<TokenId, u128>,
-        share_acc_reward_per_share: Mapping<TokenId, u128>,
-        share_last_reward_block: Mapping<TokenId, u64>,
-        share_reward_rate_bps: Mapping<TokenId, u128>,
+
+        // KYC-based transfer restriction fields
+        /// Transfer restriction configuration per token
+        transfer_restrictions: Mapping<TokenId, TransferRestrictionConfig>,
+        /// User transfer quota tracking (token_id, account) -> quota
+        user_transfer_quotas: Mapping<(TokenId, AccountId), UserTransferQuota>,
+        /// Blacklisted accounts that cannot transfer tokens
+        blacklist: Mapping<AccountId, bool>,
+        /// Whitelisted accounts (if whitelist-only restriction is enabled)
+        whitelist: Mapping<(TokenId, AccountId), bool>,
+        /// Cached KYC verification levels to reduce cross-contract calls
+        kyc_verification_cache: Mapping<AccountId, (KYCVerificationLevel, u64)>, // (level, block_cached)
+        /// KYC transfer audit log
+        kyc_transfer_log: Mapping<u64, KYCTransferEvent>,
+        kyc_transfer_log_counter: u64,
+
         /// Vesting schedules for tokens (TokenId, AccountId)
         vesting_schedules: Mapping<(TokenId, AccountId), VestingSchedule>,
         /// Custom URI overrides for tokens
         token_uris: Mapping<TokenId, String>,
+
+        /// Reentrancy protection guard
+        reentrancy_guard: ReentrancyGuard,
+        /// Snapshot functionality for governance voting (Issue #194)
+        snapshot_counter: Mapping<TokenId, u64>,
+        snapshots: Mapping<(TokenId, u64), Snapshot>,
+        account_snapshots: Mapping<(AccountId, TokenId, u64), u128>, // (account, token_id, snapshot_id) -> balance
+
+        // Staking fields (Issue #197)
+        /// Staking information per (staker, token_id)
+        share_stakes: Mapping<(AccountId, TokenId), ShareStakeInfo>,
+        /// Total staked shares per token
+        share_total_staked: Mapping<TokenId, u128>,
+        /// Accumulated reward per share (scaled by STAKE_SCALING)
+        share_acc_reward_per_share: Mapping<TokenId, u128>,
+        /// Last block number when rewards were calculated
+        share_last_reward_block: Mapping<TokenId, u64>,
+        /// Reward rate in basis points per year
+        share_reward_rate_bps: Mapping<TokenId, u128>,
+        /// Reward pool balance per token
+        share_reward_pool: Mapping<TokenId, u128>,
     }
 
     // Data types extracted to types.rs (Issue #101)
@@ -319,6 +358,28 @@ pub mod property_token {
         pub passed: bool,
     }
 
+    // --- Snapshot Events (Issue #194) ---
+    #[ink(event)]
+    pub struct SnapshotCreated {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub snapshot_id: u64,
+        pub total_supply: u64,
+        pub description: String,
+    }
+
+    #[ink(event)]
+    pub struct SnapshotBalanceQueried {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub snapshot_id: u64,
+        #[ink(topic)]
+        pub account: AccountId,
+        pub balance: u128,
+    }
+
     // --- Marketplace Events ---
     #[ink(event)]
     pub struct AskPlaced {
@@ -371,6 +432,61 @@ pub mod property_token {
         pub token_id: TokenId,
     }
 
+
+    // --- KYC Transfer Restriction Events ---
+    #[ink(event)]
+    pub struct TransferRestrictionConfigured {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        pub restriction_level: String,
+        pub min_verification_level: u8,
+        pub max_transfer_amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct TransferRestrictionRemoved {
+        #[ink(topic)]
+        pub token_id: TokenId,
+    }
+
+    #[ink(event)]
+    pub struct KYCTransferVerified {
+        #[ink(topic)]
+        pub from: AccountId,
+        #[ink(topic)]
+        pub to: AccountId,
+        #[ink(topic)]
+        pub token_id: TokenId,
+        pub amount: u128,
+        pub from_verification_level: u8,
+        pub to_verification_level: u8,
+    }
+
+    #[ink(event)]
+    pub struct KYCTransferRejected {
+        #[ink(topic)]
+        pub from: AccountId,
+        #[ink(topic)]
+        pub to: AccountId,
+        #[ink(topic)]
+        pub token_id: TokenId,
+        pub reason: String,
+    }
+
+    #[ink(event)]
+    pub struct AccountBlacklisted {
+        #[ink(topic)]
+        pub account: AccountId,
+        pub status: bool,
+    }
+
+    #[ink(event)]
+    pub struct AccountWhitelisted {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub account: AccountId,
+        pub status: bool,
     // --- Staking Events ---
     #[ink(event)]
     pub struct SharesStaked {
@@ -379,7 +495,7 @@ pub mod property_token {
         #[ink(topic)]
         pub staker: AccountId,
         pub amount: u128,
-        pub lock_period: ShareLockPeriod,
+        pub lock_period: LockPeriod,
         pub lock_until: u64,
     }
 
@@ -407,6 +523,7 @@ pub mod property_token {
         pub token_id: TokenId,
         #[ink(topic)]
         pub funder: AccountId,
+        pub amount: u128,
     }
 
     // --- Vesting Events ---
@@ -430,6 +547,17 @@ pub mod property_token {
         #[ink(topic)]
         pub account: AccountId,
         pub amount: u128,
+
+    }
+
+    // --- Supply Management Events ---
+    #[ink(event)]
+    pub struct TokenBurned {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub burned_by: AccountId,
+        pub reason: String,
     }
 
     impl Default for PropertyToken {
@@ -446,13 +574,16 @@ pub mod property_token {
 
             // Initialize default bridge configuration
             let bridge_config = BridgeConfig {
-                supported_chains: vec![1, 2, 3], // Default supported chains
+                supported_chains: vec![1, 2, 3],
                 min_signatures_required: 2,
                 max_signatures_required: 5,
                 default_timeout_blocks: 100,
                 gas_limit_per_bridge: 500000,
                 emergency_pause: false,
                 metadata_preservation: true,
+                rate_limit_enabled: false,
+                max_requests_per_day: 1000,
+                max_value_per_day: 10_000_000,
             };
             let current_chain = bridge_config.supported_chains[0];
 
@@ -514,16 +645,34 @@ pub mod property_token {
                 max_batch_size: 50,
                 property_management_contract: None,
                 management_agent: Mapping::default(),
+
+                // Initialize KYC transfer restriction fields
+                transfer_restrictions: Mapping::default(),
+                user_transfer_quotas: Mapping::default(),
+                blacklist: Mapping::default(),
+                whitelist: Mapping::default(),
+                kyc_verification_cache: Mapping::default(),
+                kyc_transfer_log: Mapping::default(),
+                kyc_transfer_log_counter: 0,
+
+                vesting_schedules: Mapping::default(),
+                token_uris: Mapping::default(),
+
+                reentrancy_guard: ReentrancyGuard::new(),
+                snapshot_counter: Mapping::default(),
+                snapshots: Mapping::default(),
+                account_snapshots: Mapping::default(),
+                // Staking fields (Issue #197)
                 share_stakes: Mapping::default(),
                 share_total_staked: Mapping::default(),
-                share_reward_pool: Mapping::default(),
                 share_acc_reward_per_share: Mapping::default(),
                 share_last_reward_block: Mapping::default(),
                 share_reward_rate_bps: Mapping::default(),
-                vesting_schedules: Mapping::default(),
-                token_uris: Mapping::default(),
+                share_reward_pool: Mapping::default(),
             }
         }
+
+
 
         /// ERC-721: Returns the balance of tokens owned by an account
         #[ink(message)]
@@ -582,6 +731,8 @@ pub mod property_token {
             {
                 return Err(Error::Unauthorized);
             }
+
+
 
             // Perform the transfer
             self.remove_token_from_owner(from, token_id)?;
@@ -720,6 +871,16 @@ pub mod property_token {
                 return Err(Error::LengthMismatch);
             }
 
+
+            // Verify KYC transfer restrictions for all tokens
+            for i in 0..ids.len() {
+                let token_id = ids[i];
+                let amount = amounts[i];
+                self.verify_kyc_transfer(&from, &to, token_id, amount)?;
+            }
+
+            // Transfer each token
+
             if ids.is_empty() {
                 return Err(Error::InvalidAmount);
             }
@@ -736,15 +897,20 @@ pub mod property_token {
             }
 
             // Execute all transfers
+
             for i in 0..ids.len() {
                 let token_id = ids[i];
                 let amount = amounts[i];
                 let from_balance = self.balances.get((&from, &token_id)).unwrap_or(0);
+
                 self.balances
                     .insert((&from, &token_id), &(from_balance - amount));
                 let to_balance = self.balances.get((&to, &token_id)).unwrap_or(0);
                 self.balances
                     .insert((&to, &token_id), &(to_balance + amount));
+
+                // Update transfer quota
+                self.update_transfer_quota(&from, &to, token_id, amount)?;
             }
 
             // Single batch event instead of N individual events
@@ -757,6 +923,7 @@ pub mod property_token {
 
             Ok(())
         }
+
         /// ERC-1155: Returns the URI for a token
         #[ink(message)]
         pub fn uri(&self, token_id: TokenId) -> Option<String> {
@@ -774,17 +941,6 @@ pub mod property_token {
         }
 
         /// Sets the compliance registry contract address (admin only).
-        ///
-        /// When set, compliance checks are delegated to this external contract
-        /// for share transfers and purchases.
-        ///
-        /// # Arguments
-        ///
-        /// * `registry` - The account ID of the compliance registry contract
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn set_compliance_registry(&mut self, registry: AccountId) -> Result<(), Error> {
             let caller = self.env().caller();
@@ -792,6 +948,309 @@ pub mod property_token {
                 return Err(Error::Unauthorized);
             }
             self.compliance_registry = Some(registry);
+            Ok(())
+        }
+
+        // --- KYC-Based Transfer Restriction Management ---
+
+        /// Configures KYC-based transfer restrictions for a specific token
+        /// Only admin can configure transfer restrictions
+        #[ink(message)]
+        pub fn configure_transfer_restrictions(
+            &mut self,
+            token_id: TokenId,
+            restriction_level: u8, // 0=None, 1=KYCRequired, 2=VerificationLevel, 3=WhitelistOnly, 4=BlacklistBased
+            min_verification_level: u8, // 0-4
+            max_transfer_amount: u128,
+            quota_period: u32,
+            hold_period: u32,
+            check_risk_level: bool,
+            max_allowed_risk_level: u8,
+        ) -> Result<(), Error> {
+            if self.env().caller() != self.admin {
+                return Err(Error::Unauthorized);
+            }
+
+            // Verify token exists
+            if self.token_owner.get(token_id).is_none() {
+                return Err(Error::TokenNotFound);
+            }
+
+            let level_str = match restriction_level {
+                0 => "None",
+                1 => "KYCRequired",
+                2 => "VerificationLevelRequired",
+                3 => "WhitelistOnly",
+                4 => "BlacklistBased",
+                _ => return Err(Error::InvalidRequest),
+            };
+
+            let restriction_level_enum = match restriction_level {
+                0 => TransferRestrictionLevel::None,
+                1 => TransferRestrictionLevel::KYCRequired,
+                2 => TransferRestrictionLevel::VerificationLevelRequired,
+                3 => TransferRestrictionLevel::WhitelistOnly,
+                4 => TransferRestrictionLevel::BlacklistBased,
+                _ => return Err(Error::InvalidRequest),
+            };
+
+            let min_level = match min_verification_level {
+                0 => KYCVerificationLevel::None,
+                1 => KYCVerificationLevel::Basic,
+                2 => KYCVerificationLevel::Standard,
+                3 => KYCVerificationLevel::Enhanced,
+                4 => KYCVerificationLevel::Institutional,
+                _ => return Err(Error::InvalidRequest),
+            };
+
+            let config = TransferRestrictionConfig {
+                restriction_level: restriction_level_enum,
+                min_verification_level: min_level,
+                max_transfer_amount,
+                quota_period,
+                hold_period,
+                check_risk_level,
+                max_allowed_risk_level,
+            };
+
+            self.transfer_restrictions.insert(token_id, &config);
+
+            self.env().emit_event(TransferRestrictionConfigured {
+                token_id,
+                restriction_level: level_str.to_string(),
+                min_verification_level,
+                max_transfer_amount,
+            });
+
+            Ok(())
+        }
+
+        /// Gets the transfer restriction configuration for a token
+        #[ink(message)]
+        pub fn get_transfer_restrictions(
+            &self,
+            token_id: TokenId,
+        ) -> Option<(u8, u8, u128, u32, u32, bool, u8)> {
+            self.transfer_restrictions.get(token_id).map(|config| {
+                let restriction_level = match config.restriction_level {
+                    TransferRestrictionLevel::None => 0,
+                    TransferRestrictionLevel::KYCRequired => 1,
+                    TransferRestrictionLevel::VerificationLevelRequired => 2,
+                    TransferRestrictionLevel::WhitelistOnly => 3,
+                    TransferRestrictionLevel::BlacklistBased => 4,
+                };
+                let min_level = match config.min_verification_level {
+                    KYCVerificationLevel::None => 0,
+                    KYCVerificationLevel::Basic => 1,
+                    KYCVerificationLevel::Standard => 2,
+                    KYCVerificationLevel::Enhanced => 3,
+                    KYCVerificationLevel::Institutional => 4,
+                };
+                (
+                    restriction_level,
+                    min_level,
+                    config.max_transfer_amount,
+                    config.quota_period,
+                    config.hold_period,
+                    config.check_risk_level,
+                    config.max_allowed_risk_level,
+                )
+            })
+        }
+
+        /// Adds an account to the blacklist
+        #[ink(message)]
+        pub fn blacklist_account(&mut self, account: AccountId) -> Result<(), Error> {
+            if self.env().caller() != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            self.blacklist.insert(account, &true);
+            self.env().emit_event(AccountBlacklisted {
+                account,
+                status: true,
+            });
+            Ok(())
+        }
+
+        /// Removes an account from the blacklist
+        #[ink(message)]
+        pub fn remove_from_blacklist(&mut self, account: AccountId) -> Result<(), Error> {
+            if self.env().caller() != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            self.blacklist.remove(account);
+            self.env().emit_event(AccountBlacklisted {
+                account,
+                status: false,
+            });
+            Ok(())
+        }
+
+        /// Checks if an account is blacklisted
+        #[ink(message)]
+        pub fn is_account_blacklisted(&self, account: AccountId) -> bool {
+            self.blacklist.get(account).unwrap_or(false)
+        }
+
+        /// Adds an account to the whitelist for a specific token
+        #[ink(message)]
+        pub fn whitelist_account(
+            &mut self,
+            token_id: TokenId,
+            account: AccountId,
+        ) -> Result<(), Error> {
+            if self.env().caller() != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            // Verify token exists
+            if self.token_owner.get(token_id).is_none() {
+                return Err(Error::TokenNotFound);
+            }
+            self.whitelist.insert((token_id, account), &true);
+            self.env().emit_event(AccountWhitelisted {
+                token_id,
+                account,
+                status: true,
+            });
+            Ok(())
+        }
+
+        /// Removes an account from the whitelist for a specific token
+        #[ink(message)]
+        pub fn remove_from_whitelist(
+            &mut self,
+            token_id: TokenId,
+            account: AccountId,
+        ) -> Result<(), Error> {
+            if self.env().caller() != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            self.whitelist.remove((token_id, account));
+            self.env().emit_event(AccountWhitelisted {
+                token_id,
+                account,
+                status: false,
+            });
+            Ok(())
+        }
+
+        /// Checks if an account is whitelisted for a specific token
+        #[ink(message)]
+        pub fn is_account_whitelisted(&self, token_id: TokenId, account: AccountId) -> bool {
+            self.whitelist.get((token_id, account)).unwrap_or(false)
+        }
+
+        /// Gets the transfer quota status for an account and token
+        #[ink(message)]
+        pub fn get_transfer_quota_status(
+            &self,
+            token_id: TokenId,
+            account: AccountId,
+        ) -> Option<(u128, u32, u32)> {
+            self.user_transfer_quotas
+                .get((token_id, account))
+                .map(|q| (q.amount_transferred, q.period_start_block, q.acquisition_block))
+        }
+
+        /// Sets transfer restrictions for a specific token
+        #[ink(message)]
+        pub fn set_transfer_restriction(
+            &mut self,
+            token_id: TokenId,
+            restriction_level: TransferRestrictionLevel,
+            min_verification_level: KYCVerificationLevel,
+            max_transfer_amount: u128,
+            quota_period: u32,
+            hold_period: u32,
+            check_risk_level: bool,
+            max_allowed_risk_level: u8,
+        ) -> Result<(), Error> {
+            // Only admin or token owner can set restrictions
+            let caller = self.env().caller();
+            if caller != self.admin {
+                let owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+                if caller != owner {
+                    return Err(Error::Unauthorized);
+                }
+            }
+
+            // Verify token exists
+            if self.token_owner.get(token_id).is_none() {
+                return Err(Error::TokenNotFound);
+            }
+
+            let config = TransferRestrictionConfig {
+                restriction_level,
+                min_verification_level,
+                max_transfer_amount,
+                quota_period,
+                hold_period,
+                check_risk_level,
+                max_allowed_risk_level,
+            };
+
+            self.transfer_restrictions.insert(token_id, &config);
+
+            let restriction_level_str = match restriction_level {
+                TransferRestrictionLevel::None => "None".to_string(),
+                TransferRestrictionLevel::KYCRequired => "KYCRequired".to_string(),
+                TransferRestrictionLevel::VerificationLevelRequired => "VerificationLevelRequired".to_string(),
+                TransferRestrictionLevel::WhitelistOnly => "WhitelistOnly".to_string(),
+                TransferRestrictionLevel::BlacklistBased => "BlacklistBased".to_string(),
+            };
+
+            let min_level = match min_verification_level {
+                KYCVerificationLevel::None => 0,
+                KYCVerificationLevel::Basic => 1,
+                KYCVerificationLevel::Standard => 2,
+                KYCVerificationLevel::Enhanced => 3,
+                KYCVerificationLevel::Institutional => 4,
+            };
+
+            self.env().emit_event(TransferRestrictionConfigured {
+                token_id,
+                restriction_level: restriction_level_str,
+                min_verification_level: min_level,
+                max_transfer_amount,
+            });
+
+            Ok(())
+        }
+
+        /// Gets the transfer restriction configuration for a token
+        #[ink(message)]
+        pub fn get_transfer_restriction_config(
+            &self,
+            token_id: TokenId,
+        ) -> Option<(TransferRestrictionLevel, KYCVerificationLevel, u128, u32, u32, bool, u8)> {
+            self.transfer_restrictions.get(token_id).map(|config| {
+                (
+                    config.restriction_level,
+                    config.min_verification_level,
+                    config.max_transfer_amount,
+                    config.quota_period,
+                    config.hold_period,
+                    config.check_risk_level,
+                    config.max_allowed_risk_level,
+                )
+            })
+        }
+
+        /// Removes transfer restrictions for a token
+        #[ink(message)]
+        pub fn remove_transfer_restriction(&mut self, token_id: TokenId) -> Result<(), Error> {
+            let caller = self.env().caller();
+            if caller != self.admin {
+                let owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+                if caller != owner {
+                    return Err(Error::Unauthorized);
+                }
+            }
+
+            self.transfer_restrictions.remove(token_id);
+
+            self.env().emit_event(TransferRestrictionRemoved { token_id });
+
             Ok(())
         }
 
@@ -836,14 +1295,6 @@ pub mod property_token {
         }
 
         /// Removes the management agent assignment for a token (owner or admin only).
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token to clear the management agent for
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn clear_management_agent(&mut self, token_id: TokenId) -> Result<(), Error> {
             let caller = self.env().caller();
@@ -875,19 +1326,6 @@ pub mod property_token {
         }
 
         /// Issues new fractional shares for a token to a recipient (owner or admin only).
-        ///
-        /// Increases both the recipient's balance and the total share supply.
-        /// Dividend credits are updated to prevent dilution of existing holders.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token to issue shares for
-        /// * `to` - The recipient of the new shares
-        /// * `amount` - The number of shares to issue (must be greater than zero)
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn issue_shares(
             &mut self,
@@ -919,19 +1357,6 @@ pub mod property_token {
         }
 
         /// Redeems (burns) fractional shares from an account.
-        ///
-        /// The caller must be the account holder or an approved operator.
-        /// Reduces both the holder's balance and the total share supply.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token whose shares are being redeemed
-        /// * `from` - The account to redeem shares from
-        /// * `amount` - The number of shares to redeem (must be greater than zero)
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn redeem_shares(
             &mut self,
@@ -965,21 +1390,6 @@ pub mod property_token {
         }
 
         /// Transfers fractional shares between accounts with compliance checks.
-        ///
-        /// Both sender and recipient must pass compliance verification when a
-        /// compliance registry is configured. Dividend credits are updated for
-        /// both parties before the transfer.
-        ///
-        /// # Arguments
-        ///
-        /// * `from` - The account to transfer shares from
-        /// * `to` - The account to transfer shares to
-        /// * `token_id` - The token whose shares are being transferred
-        /// * `amount` - The number of shares to transfer (must be greater than zero)
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn transfer_shares(
             &mut self,
@@ -998,10 +1408,25 @@ pub mod property_token {
             if !self.pass_compliance(from)? || !self.pass_compliance(to)? {
                 return Err(Error::ComplianceFailed);
             }
+
+            // Check KYC-based transfer restrictions for share transfers
+            self.verify_kyc_transfer(&from, &to, token_id, amount)?;
+
             let from_balance = self.balances.get((from, token_id)).unwrap_or(0);
             if from_balance < amount {
                 return Err(Error::InsufficientBalance);
             }
+
+            // Update user transfer quota tracking
+            let mut quota = self.user_transfer_quotas.get((token_id, from)).unwrap_or(UserTransferQuota {
+                amount_transferred: 0,
+                period_start_block: self.env().block_number(),
+                acquisition_block: self.env().block_number(),
+            });
+
+            quota.amount_transferred = quota.amount_transferred.saturating_add(amount);
+            self.user_transfer_quotas.insert((token_id, from), &quota);
+
             self.update_dividend_credit_on_change(from, token_id)?;
             self.update_dividend_credit_on_change(to, token_id)?;
             self.balances
@@ -1010,21 +1435,31 @@ pub mod property_token {
             self.balances
                 .insert((to, token_id), &(to_balance.saturating_add(amount)));
             Ok(())
+
+            non_reentrant!(self, {
+                let caller = self.env().caller();
+                if caller != from && !self.is_approved_for_all(from, caller) {
+                    return Err(Error::Unauthorized);
+                }
+                if !self.pass_compliance(from)? || !self.pass_compliance(to)? {
+                    return Err(Error::ComplianceFailed);
+                }
+                let from_balance = self.balances.get((from, token_id)).unwrap_or(0);
+                if from_balance < amount {
+                    return Err(Error::InsufficientBalance);
+                }
+                self.update_dividend_credit_on_change(from, token_id)?;
+                self.update_dividend_credit_on_change(to, token_id)?;
+                self.balances
+                    .insert((from, token_id), &(from_balance.saturating_sub(amount)));
+                let to_balance = self.balances.get((to, token_id)).unwrap_or(0);
+                self.balances
+                    .insert((to, token_id), &(to_balance.saturating_add(amount)));
+                Ok(())
+            })
         }
 
         /// Deposits dividends for distribution to all share holders of a token.
-        ///
-        /// The deposited value is distributed proportionally based on each holder's
-        /// share balance. Uses a scaled-integer approach (1e12 scaling factor) to
-        /// maintain precision across small balances.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token to deposit dividends for
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message, payable)]
         pub fn deposit_dividends(&mut self, token_id: TokenId) -> Result<(), Error> {
             let value = self.env().transferred_value();
@@ -1049,63 +1484,41 @@ pub mod property_token {
         }
 
         /// Withdraws accumulated dividends for the caller on a given token.
-        ///
-        /// Calculates any uncredited dividends, transfers the total owed amount
-        /// to the caller, and updates the tax record.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token to withdraw dividends from
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<u128, Error>` with the amount withdrawn
         #[ink(message)]
         pub fn withdraw_dividends(&mut self, token_id: TokenId) -> Result<u128, Error> {
-            let caller = self.env().caller();
-            self.update_dividend_credit_on_change(caller, token_id)?;
-            let owed = self.dividend_balance.get((caller, token_id)).unwrap_or(0);
-            if owed == 0 {
-                return Ok(0);
-            }
-            self.dividend_balance.insert((caller, token_id), &0u128);
-            match self.env().transfer(caller, owed) {
-                Ok(_) => {
-                    let mut rec = self
-                        .tax_records
-                        .get((caller, token_id))
-                        .unwrap_or(TaxRecord {
-                            dividends_received: 0,
-                            shares_sold: 0,
-                            proceeds: 0,
-                        });
-                    rec.dividends_received = rec.dividends_received.saturating_add(owed);
-                    self.tax_records.insert((caller, token_id), &rec);
-                    self.env().emit_event(DividendsWithdrawn {
-                        token_id,
-                        account: caller,
-                        amount: owed,
-                    });
-                    Ok(owed)
+            non_reentrant!(self, {
+                let caller = self.env().caller();
+                self.update_dividend_credit_on_change(caller, token_id)?;
+                let owed = self.dividend_balance.get((caller, token_id)).unwrap_or(0);
+                if owed == 0 {
+                    return Ok(0);
                 }
-                Err(_) => Err(Error::InvalidRequest),
-            }
+                self.dividend_balance.insert((caller, token_id), &0u128);
+                match self.env().transfer(caller, owed) {
+                    Ok(_) => {
+                        let mut rec =
+                            self.tax_records
+                                .get((caller, token_id))
+                                .unwrap_or(TaxRecord {
+                                    dividends_received: 0,
+                                    shares_sold: 0,
+                                    proceeds: 0,
+                                });
+                        rec.dividends_received = rec.dividends_received.saturating_add(owed);
+                        self.tax_records.insert((caller, token_id), &rec);
+                        self.env().emit_event(DividendsWithdrawn {
+                            token_id,
+                            account: caller,
+                            amount: owed,
+                        });
+                        Ok(owed)
+                    }
+                    Err(_) => Err(Error::InvalidRequest),
+                }
+            })
         }
 
         /// Creates a governance proposal for a tokenized property.
-        ///
-        /// Only the token owner or admin may create proposals. Voting weight
-        /// is determined by each voter's share balance.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token the proposal applies to
-        /// * `quorum` - Minimum for-votes required for the proposal to pass
-        /// * `description_hash` - Hash of the off-chain proposal description
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<u64, Error>` with the new proposal ID
         #[ink(message)]
         pub fn create_proposal(
             &mut self,
@@ -1140,19 +1553,6 @@ pub mod property_token {
         }
 
         /// Casts a vote on an open governance proposal.
-        ///
-        /// Voting weight equals the caller's share balance for the token.
-        /// Each account may only vote once per proposal.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token the proposal belongs to
-        /// * `proposal_id` - The proposal to vote on
-        /// * `support` - `true` to vote in favor, `false` to vote against
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn vote(
             &mut self,
@@ -1175,7 +1575,7 @@ pub mod property_token {
             {
                 return Err(Error::Unauthorized);
             }
-            let weight = self.governance_weight(voter, token_id);
+            let weight = self.balances.get((voter, token_id)).unwrap_or(0);
             if support {
                 proposal.for_votes = proposal.for_votes.saturating_add(weight);
             } else {
@@ -1195,17 +1595,6 @@ pub mod property_token {
         }
 
         /// Executes a governance proposal, closing voting and recording the outcome.
-        ///
-        /// A proposal passes if for-votes meet the quorum and exceed against-votes.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token the proposal belongs to
-        /// * `proposal_id` - The proposal to execute
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<bool, Error>` where `true` means the proposal passed
         #[ink(message)]
         pub fn execute_proposal(
             &mut self,
@@ -1241,20 +1630,90 @@ pub mod property_token {
             self.proposals.get((token_id, proposal_id))
         }
 
+        /// Creates a snapshot for the property token to capture governance state.
+        #[ink(message)]
+        pub fn create_snapshot(
+            &mut self,
+            token_id: TokenId,
+            description: String,
+        ) -> Result<u64, Error> {
+            if self.token_owner.get(token_id).is_none() {
+                return Err(Error::TokenNotFound);
+            }
+            let snapshot_id = self
+                .snapshot_counter
+                .get(token_id)
+                .unwrap_or(0)
+                .saturating_add(1);
+            self.snapshot_counter.insert(token_id, &snapshot_id);
+            let snapshot = Snapshot {
+                id: snapshot_id,
+                token_id,
+                created_at: self.env().block_timestamp(),
+                total_supply_at_snapshot: self.total_supply as u128,
+                description: description.clone(),
+            };
+            self.snapshots.insert((token_id, snapshot_id), &snapshot);
+            self.env().emit_event(SnapshotCreated {
+                token_id,
+                snapshot_id,
+                total_supply: self.total_supply,
+                description,
+            });
+            Ok(snapshot_id)
+        }
+
+        /// Records the balance of an account for a specific snapshot.
+        #[ink(message)]
+        pub fn record_snapshot_balance(
+            &mut self,
+            token_id: TokenId,
+            snapshot_id: u64,
+            account: AccountId,
+        ) -> Result<u128, Error> {
+            if self.snapshots.get((token_id, snapshot_id)).is_none() {
+                return Err(Error::InvalidRequest);
+            }
+            let balance = self.balances.get((account, token_id)).unwrap_or(0);
+            self.account_snapshots
+                .insert((account, token_id, snapshot_id), &balance);
+            self.env().emit_event(SnapshotBalanceQueried {
+                token_id,
+                snapshot_id,
+                account,
+                balance,
+            });
+            Ok(balance)
+        }
+
+        /// Returns the recorded snapshot balance for an account.
+        #[ink(message)]
+        pub fn get_balance_at_snapshot(
+            &self,
+            token_id: TokenId,
+            snapshot_id: u64,
+            account: AccountId,
+        ) -> Result<u128, Error> {
+            let balance = self
+                .account_snapshots
+                .get((account, token_id, snapshot_id))
+                .unwrap_or(0);
+            Ok(balance)
+        }
+
+        /// Returns snapshot metadata by token and snapshot ID.
+        #[ink(message)]
+        pub fn get_snapshot(&self, token_id: TokenId, snapshot_id: u64) -> Option<Snapshot> {
+            self.snapshots.get((token_id, snapshot_id))
+        }
+
+        /// Returns the latest snapshot ID for a token.
+        #[ink(message)]
+        pub fn latest_snapshot_id(&self, token_id: TokenId) -> u64 {
+            self.snapshot_counter.get(token_id).unwrap_or(0)
+        }
+
         /// Places a sell order (ask) for fractional shares on the marketplace.
-        ///
-        /// The specified shares are moved into escrow and a persistent ask is
-        /// created. Other accounts can fill the ask via `buy_shares`.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token whose shares are being offered
-        /// * `price_per_share` - Price per share in the native currency
-        /// * `amount` - Number of shares to sell
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn place_ask(
             &mut self,
@@ -1293,14 +1752,6 @@ pub mod property_token {
         }
 
         /// Cancels an active sell order and returns escrowed shares to the seller.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token whose ask is being cancelled
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn cancel_ask(&mut self, token_id: TokenId) -> Result<(), Error> {
             let seller = self.env().caller();
@@ -1319,20 +1770,6 @@ pub mod property_token {
         }
 
         /// Purchases fractional shares from an existing sell order.
-        ///
-        /// The caller must send exactly `price_per_share * amount` as the
-        /// transferred value. Both buyer and seller must pass compliance checks.
-        /// Proceeds are forwarded to the seller and a tax record is updated.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token whose shares are being purchased
-        /// * `seller` - The account that placed the sell order
-        /// * `amount` - Number of shares to buy
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message, payable)]
         pub fn buy_shares(
             &mut self,
@@ -1340,66 +1777,68 @@ pub mod property_token {
             seller: AccountId,
             amount: u128,
         ) -> Result<(), Error> {
-            if amount == 0 {
-                return Err(Error::InvalidAmount);
-            }
-            let ask = self
-                .asks
-                .get((token_id, seller))
-                .ok_or(Error::AskNotFound)?;
-            if ask.amount < amount {
-                return Err(Error::InvalidAmount);
-            }
-            let cost = ask.price_per_share.saturating_mul(amount);
-            let paid = self.env().transferred_value();
-            if paid != cost {
-                return Err(Error::InvalidAmount);
-            }
-            let buyer = self.env().caller();
-            if !self.pass_compliance(buyer)? || !self.pass_compliance(seller)? {
-                return Err(Error::ComplianceFailed);
-            }
-            let esc = self.escrowed_shares.get((token_id, seller)).unwrap_or(0);
-            if esc < amount {
-                return Err(Error::AskNotFound);
-            }
-            let to_balance = self.balances.get((buyer, token_id)).unwrap_or(0);
-            self.balances
-                .insert((buyer, token_id), &(to_balance.saturating_add(amount)));
-            self.escrowed_shares
-                .insert((token_id, seller), &(esc.saturating_sub(amount)));
-            match self.env().transfer(seller, cost) {
-                Ok(_) => {
-                    let mut rec = self
-                        .tax_records
-                        .get((seller, token_id))
-                        .unwrap_or(TaxRecord {
-                            dividends_received: 0,
-                            shares_sold: 0,
-                            proceeds: 0,
-                        });
-                    rec.shares_sold = rec.shares_sold.saturating_add(amount);
-                    rec.proceeds = rec.proceeds.saturating_add(cost);
-                    self.tax_records.insert((seller, token_id), &rec);
+            non_reentrant!(self, {
+                if amount == 0 {
+                    return Err(Error::InvalidAmount);
                 }
-                Err(_) => return Err(Error::InvalidRequest),
-            }
-            self.last_trade_price.insert(token_id, &ask.price_per_share);
-            if ask.amount == amount {
-                self.asks.remove((token_id, seller));
-            } else {
-                let mut new_ask = ask.clone();
-                new_ask.amount = ask.amount.saturating_sub(amount);
-                self.asks.insert((token_id, seller), &new_ask);
-            }
-            self.env().emit_event(SharesPurchased {
-                token_id,
-                seller,
-                buyer,
-                amount,
-                price_per_share: ask.price_per_share,
-            });
-            Ok(())
+                let ask = self
+                    .asks
+                    .get((token_id, seller))
+                    .ok_or(Error::AskNotFound)?;
+                if ask.amount < amount {
+                    return Err(Error::InvalidAmount);
+                }
+                let cost = ask.price_per_share.saturating_mul(amount);
+                let paid = self.env().transferred_value();
+                if paid != cost {
+                    return Err(Error::InvalidAmount);
+                }
+                let buyer = self.env().caller();
+                if !self.pass_compliance(buyer)? || !self.pass_compliance(seller)? {
+                    return Err(Error::ComplianceFailed);
+                }
+                let esc = self.escrowed_shares.get((token_id, seller)).unwrap_or(0);
+                if esc < amount {
+                    return Err(Error::AskNotFound);
+                }
+                let to_balance = self.balances.get((buyer, token_id)).unwrap_or(0);
+                self.balances
+                    .insert((buyer, token_id), &(to_balance.saturating_add(amount)));
+                self.escrowed_shares
+                    .insert((token_id, seller), &(esc.saturating_sub(amount)));
+                match self.env().transfer(seller, cost) {
+                    Ok(_) => {
+                        let mut rec =
+                            self.tax_records
+                                .get((seller, token_id))
+                                .unwrap_or(TaxRecord {
+                                    dividends_received: 0,
+                                    shares_sold: 0,
+                                    proceeds: 0,
+                                });
+                        rec.shares_sold = rec.shares_sold.saturating_add(amount);
+                        rec.proceeds = rec.proceeds.saturating_add(cost);
+                        self.tax_records.insert((seller, token_id), &rec);
+                    }
+                    Err(_) => return Err(Error::InvalidRequest),
+                }
+                self.last_trade_price.insert(token_id, &ask.price_per_share);
+                if ask.amount == amount {
+                    self.asks.remove((token_id, seller));
+                } else {
+                    let mut new_ask = ask.clone();
+                    new_ask.amount = ask.amount.saturating_sub(amount);
+                    self.asks.insert((token_id, seller), &new_ask);
+                }
+                self.env().emit_event(SharesPurchased {
+                    token_id,
+                    seller,
+                    buyer,
+                    amount,
+                    price_per_share: ask.price_per_share,
+                });
+                Ok(())
+            })
         }
 
         /// Returns the last trade price per share for a token, if any trades have occurred.
@@ -1409,17 +1848,6 @@ pub mod property_token {
         }
 
         /// Returns a portfolio summary for a set of tokens owned by an account.
-        ///
-        /// Each entry contains (token_id, share_balance, last_trade_price).
-        ///
-        /// # Arguments
-        ///
-        /// * `owner` - The account to query
-        /// * `token_ids` - The tokens to include in the portfolio summary
-        ///
-        /// # Returns
-        ///
-        /// Returns a vector of `(TokenId, balance, last_price)` tuples
         #[ink(message)]
         pub fn get_portfolio(
             &self,
@@ -1511,6 +1939,303 @@ pub mod property_token {
             }
         }
 
+        /// Verifies KYC-based transfer restrictions for an NFT transfer
+        fn verify_kyc_transfer(
+            &mut self,
+            from: &AccountId,
+            to: &AccountId,
+            token_id: TokenId,
+            amount: u128,
+        ) -> Result<(), Error> {
+            // Check if account is blacklisted
+            if self.blacklist.get(from).unwrap_or(false) {
+                self.env().emit_event(KYCTransferRejected {
+                    from: *from,
+                    to: *to,
+                    token_id,
+                    reason: "Sender is blacklisted".to_string(),
+                });
+                return Err(Error::AccountBlacklisted);
+            }
+
+            if self.blacklist.get(to).unwrap_or(false) {
+                self.env().emit_event(KYCTransferRejected {
+                    from: *from,
+                    to: *to,
+                    token_id,
+                    reason: "Recipient is blacklisted".to_string(),
+                });
+                return Err(Error::AccountBlacklisted);
+            }
+
+            // Get verification levels for logging
+            let from_level = self.get_kyc_verification_level(from).unwrap_or(KYCVerificationLevel::None);
+            let to_level = self.get_kyc_verification_level(to).unwrap_or(KYCVerificationLevel::None);
+
+            // Get transfer restrictions for this token
+            if let Some(config) = self.transfer_restrictions.get(token_id) {
+                // Check whitelist if enabled
+                if config.restriction_level == TransferRestrictionLevel::WhitelistOnly {
+                    if !self.whitelist.get((token_id, *from)).unwrap_or(false) {
+                        self.env().emit_event(KYCTransferRejected {
+                            from: *from,
+                            to: *to,
+                            token_id,
+                            reason: "Sender not whitelisted".to_string(),
+                        });
+                        return Err(Error::AccountNotWhitelisted);
+                    }
+                    if !self.whitelist.get((token_id, *to)).unwrap_or(false) {
+                        self.env().emit_event(KYCTransferRejected {
+                            from: *from,
+                            to: *to,
+                            token_id,
+                            reason: "Recipient not whitelisted".to_string(),
+                        });
+                        return Err(Error::AccountNotWhitelisted);
+                    }
+                }
+
+                // Check verification level if required
+                if config.restriction_level != TransferRestrictionLevel::None {
+                    if from_level < config.min_verification_level {
+                        self.env().emit_event(KYCTransferRejected {
+                            from: *from,
+                            to: *to,
+                            token_id,
+                            reason: "Sender verification level insufficient".to_string(),
+                        });
+                        return Err(Error::VerificationLevelInsufficient);
+                    }
+
+                    if to_level < config.min_verification_level {
+                        self.env().emit_event(KYCTransferRejected {
+                            from: *from,
+                            to: *to,
+                            token_id,
+                            reason: "Recipient verification level insufficient".to_string(),
+                        });
+                        return Err(Error::VerificationLevelInsufficient);
+                    }
+                }
+
+                // Check transfer quota
+                if config.max_transfer_amount > 0 {
+                    self.check_transfer_quota(from, token_id, amount, &config)?;
+                }
+
+                // Check hold period
+                if config.hold_period > 0 {
+                    self.check_hold_period(from, token_id, &config)?;
+                }
+
+                // Check risk level
+                if config.check_risk_level {
+                    self.check_risk_levels(from, to, config.max_allowed_risk_level)?;
+                }
+            }
+
+            // Convert verification levels to u8 for event
+            let from_level_u8 = match from_level {
+                KYCVerificationLevel::None => 0,
+                KYCVerificationLevel::Basic => 1,
+                KYCVerificationLevel::Standard => 2,
+                KYCVerificationLevel::Enhanced => 3,
+                KYCVerificationLevel::Institutional => 4,
+            };
+
+            let to_level_u8 = match to_level {
+                KYCVerificationLevel::None => 0,
+                KYCVerificationLevel::Basic => 1,
+                KYCVerificationLevel::Standard => 2,
+                KYCVerificationLevel::Enhanced => 3,
+                KYCVerificationLevel::Institutional => 4,
+            };
+
+            self.env().emit_event(KYCTransferVerified {
+                from: *from,
+                to: *to,
+                token_id,
+                amount,
+                from_verification_level: from_level_u8,
+                to_verification_level: to_level_u8,
+            });
+
+            // Log to KYC transfer audit log
+            let timestamp = self.env().block_timestamp();
+            let log_entry = KYCTransferEvent {
+                from: *from,
+                to: *to,
+                token_id,
+                amount,
+                timestamp,
+                from_verification_level: from_level,
+                to_verification_level: to_level,
+            };
+            self.kyc_transfer_log.insert(self.kyc_transfer_log_counter, &log_entry);
+            self.kyc_transfer_log_counter = self.kyc_transfer_log_counter.saturating_add(1);
+
+            Ok(())
+        }
+
+        /// Gets the KYC verification level for an account
+        fn get_kyc_verification_level(
+            &self,
+            account: &AccountId,
+        ) -> Result<KYCVerificationLevel, Error> {
+            let current_block = self.env().block_number();
+
+            // Check cache first (cache for 100 blocks)
+            if let Some((cached_level, cached_block)) = self.kyc_verification_cache.get(account) {
+                if current_block.saturating_sub(cached_block) < 100 {
+                    return Ok(cached_level);
+                }
+            }
+
+            // Check compliance status using the compliance registry
+            let level = if let Some(registry) = self.compliance_registry {
+                use ink::env::call::FromAccountId;
+                let checker: ink::contract_ref!(propchain_traits::ComplianceChecker) =
+                    FromAccountId::from_account_id(registry);
+                
+                // If compliant, assume Standard level; otherwise Basic
+                if checker.is_compliant(*account) {
+                    KYCVerificationLevel::Standard
+                } else {
+                    KYCVerificationLevel::Basic
+                }
+            } else {
+                // If no compliance registry, default to Basic
+                KYCVerificationLevel::Basic
+            };
+
+            Ok(level)
+        }
+
+        /// Checks risk levels from compliance registry
+        fn check_risk_levels(
+            &self,
+            from: &AccountId,
+            to: &AccountId,
+            max_allowed_risk: u8,
+        ) -> Result<(), Error> {
+            // Check compliance for both sender and recipient
+            if let Some(registry) = self.compliance_registry {
+                use ink::env::call::FromAccountId;
+                let checker: ink::contract_ref!(propchain_traits::ComplianceChecker) =
+                    FromAccountId::from_account_id(registry);
+                
+                if !checker.is_compliant(*from) {
+                    return Err(Error::HighRiskAccount);
+                }
+                if !checker.is_compliant(*to) {
+                    return Err(Error::HighRiskAccount);
+                }
+            }
+            
+            Ok(())
+        }
+
+        /// Checks transfer quota for an account
+        fn check_transfer_quota(
+            &self,
+            from: &AccountId,
+            token_id: TokenId,
+            amount: u128,
+            config: &TransferRestrictionConfig,
+        ) -> Result<(), Error> {
+            let quota = self.user_transfer_quotas.get((token_id, *from));
+            let current_block = self.env().block_number();
+
+            if let Some(mut q) = quota {
+                // Check if period has expired
+                if current_block.saturating_sub(q.period_start_block) >= config.quota_period {
+                    // New period, reset quota
+                    q.amount_transferred = 0;
+                    q.period_start_block = current_block;
+                }
+
+                // Check if adding this amount exceeds quota
+                if q.amount_transferred.saturating_add(amount) > config.max_transfer_amount {
+                    return Err(Error::TransferQuotaExceeded);
+                }
+            } else {
+                // First transfer, check against quota
+                if amount > config.max_transfer_amount {
+                    return Err(Error::TransferQuotaExceeded);
+                }
+            }
+
+            Ok(())
+        }
+
+        /// Checks hold period for an account
+        fn check_hold_period(
+            &self,
+            from: &AccountId,
+            token_id: TokenId,
+            config: &TransferRestrictionConfig,
+        ) -> Result<(), Error> {
+            if let Some(quota) = self.user_transfer_quotas.get((token_id, *from)) {
+                let current_block = self.env().block_number();
+                let blocks_held = current_block.saturating_sub(quota.acquisition_block);
+
+                if blocks_held < config.hold_period {
+                    return Err(Error::HoldPeriodNotMet);
+                }
+            }
+
+            Ok(())
+        }
+
+        /// Updates transfer quota for an account after a successful transfer
+        fn update_transfer_quota(
+            &mut self,
+            from: &AccountId,
+            to: &AccountId,
+            token_id: TokenId,
+            amount: u128,
+        ) -> Result<(), Error> {
+            let current_block = self.env().block_number();
+            let config = match self.transfer_restrictions.get(token_id) {
+                Some(cfg) => cfg,
+                None => return Ok(()), // No quota tracking if no restrictions
+            };
+
+            // Update sender's quota
+            let mut from_quota = match self.user_transfer_quotas.get((token_id, *from)) {
+                Some(q) => q,
+                None => UserTransferQuota {
+                    amount_transferred: 0,
+                    period_start_block: current_block as u32,
+                    acquisition_block: current_block as u32,
+                },
+            };
+
+            // Check if period has expired and reset if needed
+            if current_block.saturating_sub(from_quota.period_start_block as u64) >= config.quota_period as u64 {
+                from_quota.amount_transferred = 0;
+                from_quota.period_start_block = current_block as u32;
+            }
+
+            // Update amount transferred
+            from_quota.amount_transferred = from_quota.amount_transferred.saturating_add(amount);
+            self.user_transfer_quotas
+                .insert((token_id, *from), &from_quota);
+
+            // Initialize recipient's quota if first transfer to them
+            if self.user_transfer_quotas.get((token_id, *to)).is_none() {
+                let to_quota = UserTransferQuota {
+                    amount_transferred: 0,
+                    period_start_block: current_block as u32,
+                    acquisition_block: current_block as u32,
+                };
+                self.user_transfer_quotas.insert((token_id, *to), &to_quota);
+            }
+
+            Ok(())
+        }
+
         fn update_dividend_credit_on_change(
             &mut self,
             account: AccountId,
@@ -1541,16 +2266,11 @@ pub mod property_token {
         ) -> Result<TokenId, Error> {
             let caller = self.env().caller();
 
-            // Register property in the property registry (simulated here)
-            // In a real implementation, this might call an external contract
-
-            // Mint a new token
             self.token_counter += 1;
             let token_id = self.token_counter;
 
-            // Store property information
             let property_info = PropertyInfo {
-                id: token_id, // Using token_id as property id for this implementation
+                id: token_id,
                 owner: caller,
                 metadata: metadata.clone(),
                 registered_at: self.env().block_timestamp(),
@@ -1559,16 +2279,13 @@ pub mod property_token {
             self.token_owner.insert(token_id, &caller);
             self.add_token_to_owner(caller, token_id)?;
 
-            // Initialize balances
             self.balances.insert((&caller, &token_id), &1u128);
 
-            // Store property-specific information
             self.token_properties.insert(token_id, &property_info);
-            self.property_tokens.insert(token_id, &token_id); // property_id maps to token_id
+            self.property_tokens.insert(token_id, &token_id);
 
-            // Initialize ownership history
             let initial_transfer = OwnershipTransfer {
-                from: AccountId::from([0u8; 32]), // Zero address for minting
+                from: AccountId::from([0u8; 32]),
                 to: caller,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: propchain_traits::crypto::hash_encoded(&(&caller, token_id)),
@@ -1578,7 +2295,6 @@ pub mod property_token {
             self.ownership_history_items
                 .insert((token_id, 0), &initial_transfer);
 
-            // Initialize compliance as unverified
             let compliance_info = ComplianceInfo {
                 verified: false,
                 verification_date: 0,
@@ -1587,7 +2303,6 @@ pub mod property_token {
             };
             self.compliance_flags.insert(token_id, &compliance_info);
 
-            // Initialize legal documents count
             self.legal_documents_count.insert(token_id, &0u32);
 
             self.total_supply += 1;
@@ -1682,10 +2397,8 @@ pub mod property_token {
                 return Err(Error::Unauthorized);
             }
 
-            // Get existing documents count
             let document_count = self.legal_documents_count.get(token_id).unwrap_or(0);
 
-            // Add new document
             let document_info = DocumentInfo {
                 document_hash,
                 document_type: document_type.clone(),
@@ -1693,7 +2406,6 @@ pub mod property_token {
                 uploader: caller,
             };
 
-            // Save updated documents
             self.legal_documents_items
                 .insert((token_id, document_count), &document_info);
             self.legal_documents_count
@@ -1717,7 +2429,6 @@ pub mod property_token {
         ) -> Result<(), Error> {
             let caller = self.env().caller();
 
-            // Only admin or bridge operators can verify compliance
             if caller != self.admin && !self.bridge_operators.contains(&caller) {
                 return Err(Error::Unauthorized);
             }
@@ -1770,17 +2481,14 @@ pub mod property_token {
             let caller = self.env().caller();
             let token_owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
 
-            // Check authorization
             if token_owner != caller {
                 return Err(Error::Unauthorized);
             }
 
-            // Check if bridge is paused
             if self.bridge_config.emergency_pause {
                 return Err(Error::BridgePaused);
             }
 
-            // Validate destination chain
             if !self
                 .bridge_config
                 .supported_chains
@@ -1789,7 +2497,6 @@ pub mod property_token {
                 return Err(Error::InvalidChain);
             }
 
-            // Check compliance before bridging
             let compliance_info = self
                 .compliance_flags
                 .get(token_id)
@@ -1798,19 +2505,16 @@ pub mod property_token {
                 return Err(Error::ComplianceFailed);
             }
 
-            // Validate signature requirements
             if required_signatures < self.bridge_config.min_signatures_required
                 || required_signatures > self.bridge_config.max_signatures_required
             {
                 return Err(Error::InsufficientSignatures);
             }
 
-            // Check for duplicate requests
             if self.has_pending_bridge_request(token_id) {
                 return Err(Error::DuplicateBridgeRequest);
             }
 
-            // Create bridge request
             self.bridge_request_counter += 1;
             let request_id = self.bridge_request_counter;
             let current_block = self.env().block_number();
@@ -1854,7 +2558,6 @@ pub mod property_token {
         pub fn sign_bridge_request(&mut self, request_id: u64, approve: bool) -> Result<(), Error> {
             let caller = self.env().caller();
 
-            // Check if caller is a bridge operator
             if !self.bridge_operators.contains(&caller) {
                 return Err(Error::Unauthorized);
             }
@@ -1864,7 +2567,6 @@ pub mod property_token {
                 .get(request_id)
                 .ok_or(Error::InvalidRequest)?;
 
-            // Check if request has expired
             if let Some(expires_at) = request.expires_at {
                 if u64::from(self.env().block_number()) > expires_at {
                     request.status = BridgeOperationStatus::Expired;
@@ -1873,15 +2575,12 @@ pub mod property_token {
                 }
             }
 
-            // Check if already signed
             if request.signatures.contains(&caller) {
                 return Err(Error::AlreadySigned);
             }
 
-            // Add signature
             request.signatures.push(caller);
 
-            // Update status based on approval and signatures collected
             if !approve {
                 request.status = BridgeOperationStatus::Failed;
                 self.env().emit_event(BridgeFailed {
@@ -1892,7 +2591,6 @@ pub mod property_token {
             } else if request.signatures.len() >= request.required_signatures as usize {
                 request.status = BridgeOperationStatus::Locked;
 
-                // Lock the token for bridging
                 let token_owner = self
                     .token_owner
                     .get(request.token_id)
@@ -1901,7 +2599,7 @@ pub mod property_token {
                 self.balances
                     .insert((&token_owner, &request.token_id), &0u128);
                 self.token_owner
-                    .insert(request.token_id, &AccountId::from([0u8; 32])); // Lock to zero address
+                    .insert(request.token_id, &AccountId::from([0u8; 32]));
             }
 
             self.bridge_requests.insert(request_id, &request);
@@ -1921,7 +2619,6 @@ pub mod property_token {
         pub fn execute_bridge(&mut self, request_id: u64) -> Result<(), Error> {
             let caller = self.env().caller();
 
-            // Check if caller is a bridge operator
             if !self.bridge_operators.contains(&caller) {
                 return Err(Error::Unauthorized);
             }
@@ -1931,20 +2628,16 @@ pub mod property_token {
                 .get(request_id)
                 .ok_or(Error::InvalidRequest)?;
 
-            // Check if request is ready for execution
             if request.status != BridgeOperationStatus::Locked {
                 return Err(Error::InvalidRequest);
             }
 
-            // Check if enough signatures are collected
             if request.signatures.len() < request.required_signatures as usize {
                 return Err(Error::InsufficientSignatures);
             }
 
-            // Generate transaction hash
             let transaction_hash = self.generate_bridge_transaction_hash(&request);
 
-            // Create bridge transaction record
             self.transaction_counter += 1;
             let transaction = BridgeTransaction {
                 transaction_id: self.transaction_counter,
@@ -1960,14 +2653,11 @@ pub mod property_token {
                 metadata: request.metadata.clone(),
             };
 
-            // Update request status
             request.status = BridgeOperationStatus::Completed;
             self.bridge_requests.insert(request_id, &request);
 
-            // Store transaction verification
             self.verified_bridge_hashes.insert(transaction_hash, &true);
 
-            // Add to bridge history
             let mut history = self
                 .bridge_transactions
                 .get(request.sender)
@@ -1975,12 +2665,11 @@ pub mod property_token {
             history.push(transaction.clone());
             self.bridge_transactions.insert(request.sender, &history);
 
-            // Update bridged token info
             let bridged_info = BridgedTokenInfo {
                 original_chain: request.source_chain,
                 original_token_id: request.token_id,
                 destination_chain: request.destination_chain,
-                destination_token_id: request.token_id, // Will be updated on destination
+                destination_token_id: request.token_id,
                 bridged_at: self.env().block_timestamp(),
                 status: BridgingStatus::InTransit,
             };
@@ -2009,30 +2698,25 @@ pub mod property_token {
             metadata: PropertyMetadata,
             transaction_hash: Hash,
         ) -> Result<TokenId, Error> {
-            // Only bridge operators can receive bridged tokens
             let caller = self.env().caller();
             if !self.bridge_operators.contains(&caller) {
                 return Err(Error::Unauthorized);
             }
 
-            // Verify transaction hash or accept new validated bridge receipts from a bridge operator
             if !self
                 .verified_bridge_hashes
                 .get(transaction_hash)
                 .unwrap_or(false)
             {
-                // Only authorized bridge operators may mint bridged tokens
                 if !self.bridge_operators.contains(&caller) {
                     return Err(Error::Unauthorized);
                 }
                 self.verified_bridge_hashes.insert(transaction_hash, &true);
             }
 
-            // Create a new token for the recipient
             self.token_counter += 1;
             let new_token_id = self.token_counter;
 
-            // Store property information
             let property_info = PropertyInfo {
                 id: new_token_id,
                 owner: recipient,
@@ -2045,9 +2729,8 @@ pub mod property_token {
             self.add_token_to_owner(recipient, new_token_id)?;
             self.balances.insert((&recipient, &new_token_id), &1u128);
 
-            // Initialize ownership history for the new token
             let initial_transfer = OwnershipTransfer {
-                from: AccountId::from([0u8; 32]), // Zero address for minting
+                from: AccountId::from([0u8; 32]),
                 to: recipient,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: propchain_traits::crypto::hash_encoded(&(
@@ -2060,7 +2743,6 @@ pub mod property_token {
             self.ownership_history_items
                 .insert((new_token_id, 0), &initial_transfer);
 
-            // Initialize compliance as verified for bridged tokens
             let compliance_info = ComplianceInfo {
                 verified: true,
                 verification_date: self.env().block_timestamp(),
@@ -2069,14 +2751,12 @@ pub mod property_token {
             };
             self.compliance_flags.insert(new_token_id, &compliance_info);
 
-            // Initialize legal documents count
             self.legal_documents_count.insert(new_token_id, &0u32);
 
             self.total_supply += 1;
             self.bridged_token_origins
                 .insert(new_token_id, &(source_chain, original_token_id));
 
-            // Update or create bridged token status for the source token
             let mut bridged_info = self
                 .bridged_tokens
                 .get((&source_chain, &original_token_id))
@@ -2095,7 +2775,7 @@ pub mod property_token {
                 .insert((&source_chain, &original_token_id), &bridged_info);
 
             self.env().emit_event(Transfer {
-                from: None, // None indicates minting
+                from: None,
                 to: Some(recipient),
                 id: new_token_id,
             });
@@ -2114,12 +2794,10 @@ pub mod property_token {
             let caller = self.env().caller();
             let token_owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
 
-            // Check authorization
             if token_owner != caller {
                 return Err(Error::Unauthorized);
             }
 
-            // Locate bridged token origin metadata
             let (source_chain, original_token_id) = self
                 .bridged_token_origins
                 .get(token_id)
@@ -2134,18 +2812,15 @@ pub mod property_token {
                 return Err(Error::InvalidRequest);
             }
 
-            // Burn the token
             self.remove_token_from_owner(caller, token_id)?;
             self.token_owner.remove(token_id);
             self.balances.insert((&caller, &token_id), &0u128);
             self.total_supply -= 1;
 
-            // Destination chain must match the original source chain for return burns
             if destination_chain != source_chain {
                 return Err(Error::InvalidChain);
             }
 
-            // Update bridged token status on the original record
             let mut updated_info = bridged_info;
             updated_info.status = BridgingStatus::InTransit;
             self.bridged_tokens
@@ -2154,8 +2829,78 @@ pub mod property_token {
 
             self.env().emit_event(Transfer {
                 from: Some(caller),
-                to: None, // None indicates burning
+                to: None,
                 id: token_id,
+            });
+
+            Ok(())
+        }
+
+        /// Burn a token for supply management purposes.
+        ///
+        /// Only the contract admin can burn tokens. This is used for supply management,
+        /// such as removing tokens from circulation, handling regulatory requirements,
+        /// or managing tokenomics.
+        ///
+        /// # Arguments
+        /// * `token_id` - The ID of the token to burn
+        /// * `reason` - A description of why the token is being burned (for audit trail)
+        ///
+        /// # Requirements
+        /// * Caller must be the contract admin
+        /// * Token must exist
+        /// * Token must not be locked in a bridge operation
+        ///
+        /// # Effects
+        /// * Removes token from owner's balance
+        /// * Decrements total supply
+        /// * Clears all token approvals
+        /// * Emits `Transfer` event (from owner to zero address)
+        /// * Emits `TokenBurned` event with reason
+        #[ink(message)]
+        pub fn burn(&mut self, token_id: TokenId, reason: String) -> Result<(), Error> {
+            let caller = self.env().caller();
+
+            // Only admin can burn tokens
+            if caller != self.admin {
+                return Err(Error::Unauthorized);
+            }
+
+            // Check token exists
+            let token_owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+
+            // Check token is not locked in bridge
+            if self.has_pending_bridge_request(token_id) {
+                return Err(Error::BridgeLocked);
+            }
+
+            // Remove token from owner
+            self.remove_token_from_owner(token_owner, token_id)?;
+
+            // Clear token ownership
+            self.token_owner.remove(token_id);
+
+            // Clear approvals
+            self.token_approvals.remove(token_id);
+
+            // Clear balances
+            self.balances.insert((&token_owner, &token_id), &0u128);
+
+            // Decrement total supply
+            self.total_supply = self.total_supply.saturating_sub(1);
+
+            // Emit Transfer event (to zero address indicates burn)
+            self.env().emit_event(Transfer {
+                from: Some(token_owner),
+                to: None,
+                id: token_id,
+            });
+
+            // Emit TokenBurned event with reason for audit trail
+            self.env().emit_event(TokenBurned {
+                token_id,
+                burned_by: caller,
+                reason,
             });
 
             Ok(())
@@ -2170,7 +2915,6 @@ pub mod property_token {
         ) -> Result<(), Error> {
             let caller = self.env().caller();
 
-            // Only admin can recover failed bridges
             if caller != self.admin {
                 return Err(Error::Unauthorized);
             }
@@ -2180,7 +2924,6 @@ pub mod property_token {
                 .get(request_id)
                 .ok_or(Error::InvalidRequest)?;
 
-            // Check if request is in a failed state
             if !matches!(
                 request.status,
                 BridgeOperationStatus::Failed | BridgeOperationStatus::Expired
@@ -2188,13 +2931,10 @@ pub mod property_token {
                 return Err(Error::InvalidRequest);
             }
 
-            // Execute recovery action
             match recovery_action {
                 RecoveryAction::UnlockToken => {
-                    // Unlock the token
                     if let Some(token_owner) = self.token_owner.get(request.token_id) {
                         if token_owner == AccountId::from([0u8; 32]) {
-                            // Token is locked, restore ownership to original sender
                             self.token_owner.insert(request.token_id, &request.sender);
                             self.balances
                                 .insert((&request.sender, &request.token_id), &1u128);
@@ -2204,15 +2944,12 @@ pub mod property_token {
                 }
                 RecoveryAction::RefundGas => {
                     // Gas refund logic would be implemented here
-                    // This would typically involve transferring native tokens
                 }
                 RecoveryAction::RetryBridge => {
-                    // Reset request to pending for retry
                     request.status = BridgeOperationStatus::Pending;
                     request.signatures.clear();
                 }
                 RecoveryAction::CancelBridge => {
-                    // Mark as cancelled and unlock token
                     request.status = BridgeOperationStatus::Failed;
                     if let Some(token_owner) = self.token_owner.get(request.token_id) {
                         if token_owner == AccountId::from([0u8; 32]) {
@@ -2301,7 +3038,6 @@ pub mod property_token {
         /// Gets bridge status for a token
         #[ink(message)]
         pub fn get_bridge_status(&self, token_id: TokenId) -> Option<BridgeStatus> {
-            // Prefer direct bridged token lookup for destination tokens
             if let Some((source_chain, original_token_id)) =
                 self.bridged_token_origins.get(token_id)
             {
@@ -2330,7 +3066,6 @@ pub mod property_token {
                 }
             }
 
-            // Otherwise search by supported source chain and token id
             for chain_id in &self.bridge_config.supported_chains {
                 if let Some(bridged_info) = self.bridged_tokens.get((*chain_id, token_id)) {
                     return Some(BridgeStatus {
@@ -2507,8 +3242,6 @@ pub mod property_token {
 
         /// Helper to check if token has pending bridge request
         fn has_pending_bridge_request(&self, token_id: TokenId) -> bool {
-            // This is a simplified check - in a real implementation,
-            // you might want to maintain a separate mapping for efficiency
             for i in 1..=self.bridge_request_counter {
                 if let Some(request) = self.bridge_requests.get(i) {
                     if request.token_id == token_id
@@ -2540,9 +3273,9 @@ pub mod property_token {
 
         /// Helper to estimate bridge gas usage
         fn estimate_bridge_gas_usage(&self, request: &MultisigBridgeRequest) -> u64 {
-            let base_gas = 100000; // Base gas for bridge operation
+            let base_gas = 100000;
             let metadata_gas = request.metadata.legal_description.len() as u64 * 100;
-            let signature_gas = request.required_signatures as u64 * 5000; // Gas per signature
+            let signature_gas = request.required_signatures as u64 * 5000;
             base_gas + metadata_gas + signature_gas
         }
 
@@ -2556,19 +3289,16 @@ pub mod property_token {
         ) {
             let timestamp = self.env().block_timestamp();
 
-            // Update error count for this account and error code
             let key = (account, error_code.clone());
             let current_count = self.error_counts.get(&key).unwrap_or(0);
             self.error_counts.insert(&key, &(current_count + 1));
 
-            // Update error rate (1 hour window)
-            let window_duration = 3_600_000_u64; // 1 hour in milliseconds
+            let window_duration = 3_600_000_u64;
             let rate_key = error_code.clone();
             let (mut count, window_start) =
                 self.error_rates.get(&rate_key).unwrap_or((0, timestamp));
 
             if timestamp >= window_start + window_duration {
-                // Reset window
                 count = 1;
                 self.error_rates.insert(&rate_key, &(count, timestamp));
             } else {
@@ -2576,11 +3306,9 @@ pub mod property_token {
                 self.error_rates.insert(&rate_key, &(count, window_start));
             }
 
-            // Add to recent errors (keep last 100)
             let log_id = self.error_log_counter;
             self.error_log_counter = self.error_log_counter.wrapping_add(1);
 
-            // Only keep last 100 errors (simple circular buffer)
             if log_id >= 100 {
                 let old_id = log_id.wrapping_sub(100);
                 self.recent_errors.remove(&old_id);
@@ -2606,11 +3334,11 @@ pub mod property_token {
         #[ink(message)]
         pub fn get_error_rate(&self, error_code: String) -> u64 {
             let timestamp = self.env().block_timestamp();
-            let window_duration = 3_600_000_u64; // 1 hour
+            let window_duration = 3_600_000_u64;
 
             if let Some((count, window_start)) = self.error_rates.get(&error_code) {
                 if timestamp >= window_start + window_duration {
-                    0 // Window expired
+                    0
                 } else {
                     count
                 }
@@ -2622,7 +3350,6 @@ pub mod property_token {
         /// Get recent error log entries (admin only)
         #[ink(message)]
         pub fn get_recent_errors(&self, limit: u32) -> Vec<ErrorLogEntry> {
-            // Only admin can access error logs
             if self.env().caller() != self.admin {
                 return Vec::new();
             }
@@ -2642,15 +3369,12 @@ pub mod property_token {
         // ── Staking public interface (Issue #197) ──────────────────────────
 
         /// Locks `amount` fractional shares of `token_id` for the lock period.
-        ///
-        /// Voting weight for governance is multiplied by the lock-period
-        /// multiplier while the stake is active.
         #[ink(message)]
         pub fn stake_shares(
             &mut self,
             token_id: TokenId,
             amount: u128,
-            lock_period: ShareLockPeriod,
+            lock_period: LockPeriod,
         ) -> Result<(), Error> {
             if amount == 0 {
                 return Err(Error::InvalidAmount);
@@ -2696,91 +3420,91 @@ pub mod property_token {
         /// Unlocks and returns staked shares; pending rewards are auto-claimed.
         #[ink(message)]
         pub fn unstake_shares(&mut self, token_id: TokenId) -> Result<(), Error> {
-            let caller = self.env().caller();
-            let stake = self
-                .share_stakes
-                .get((caller, token_id))
-                .ok_or(Error::StakeNotFound)?;
-            let now = self.env().block_number() as u64;
-            if now < stake.lock_until {
-                return Err(Error::LockActive);
-            }
-            self.update_stake_acc_reward(token_id);
-            let stake = self
-                .share_stakes
-                .get((caller, token_id))
-                .ok_or(Error::StakeNotFound)?;
-            let rewards = self.pending_stake_rewards(&stake);
-            if rewards > 0 {
-                let pool = self.share_reward_pool.get(token_id).unwrap_or(0);
-                if pool >= rewards {
-                    self.share_reward_pool
-                        .insert(token_id, &pool.saturating_sub(rewards));
-                    let _ = self.env().transfer(caller, rewards);
-                    self.env().emit_event(StakeRewardsClaimed {
-                        token_id,
-                        staker: caller,
-                        amount: rewards,
-                    });
+            non_reentrant!(self, {
+                let caller = self.env().caller();
+                let stake = self
+                    .share_stakes
+                    .get((caller, token_id))
+                    .ok_or(Error::StakeNotFound)?;
+                let now = self.env().block_number() as u64;
+                if now < stake.lock_until {
+                    return Err(Error::LockActive);
                 }
-            }
-            let amount = stake.amount;
-            self.update_dividend_credit_on_change(caller, token_id)?;
-            let bal = self.balances.get((caller, token_id)).unwrap_or(0);
-            self.balances
-                .insert((caller, token_id), &bal.saturating_add(amount));
-            self.share_stakes.remove((caller, token_id));
-            let total = self.share_total_staked.get(token_id).unwrap_or(0);
-            self.share_total_staked
-                .insert(token_id, &total.saturating_sub(amount));
-            self.env().emit_event(SharesUnstaked {
-                token_id,
-                staker: caller,
-                amount,
-            });
-            Ok(())
+                self.update_stake_acc_reward(token_id);
+                let stake = self
+                    .share_stakes
+                    .get((caller, token_id))
+                    .ok_or(Error::StakeNotFound)?;
+                let rewards = self.pending_stake_rewards(&stake);
+                if rewards > 0 {
+                    let pool = self.share_reward_pool.get(token_id).unwrap_or(0);
+                    if pool >= rewards {
+                        self.share_reward_pool
+                            .insert(token_id, &pool.saturating_sub(rewards));
+                        let _ = self.env().transfer(caller, rewards);
+                        self.env().emit_event(StakeRewardsClaimed {
+                            token_id,
+                            staker: caller,
+                            amount: rewards,
+                        });
+                    }
+                }
+                let amount = stake.amount;
+                self.update_dividend_credit_on_change(caller, token_id)?;
+                let bal = self.balances.get((caller, token_id)).unwrap_or(0);
+                self.balances
+                    .insert((caller, token_id), &bal.saturating_add(amount));
+                self.share_stakes.remove((caller, token_id));
+                let total = self.share_total_staked.get(token_id).unwrap_or(0);
+                self.share_total_staked
+                    .insert(token_id, &total.saturating_sub(amount));
+                self.env().emit_event(SharesUnstaked {
+                    token_id,
+                    staker: caller,
+                    amount,
+                });
+                Ok(())
+            })
         }
 
         /// Claims accrued staking rewards for `token_id` without unstaking.
-        ///
-        /// Returns the amount of rewards transferred.
         #[ink(message)]
         pub fn claim_stake_rewards(&mut self, token_id: TokenId) -> Result<u128, Error> {
-            let caller = self.env().caller();
-            if self.share_stakes.get((caller, token_id)).is_none() {
-                return Err(Error::StakeNotFound);
-            }
-            self.update_stake_acc_reward(token_id);
-            let stake = self
-                .share_stakes
-                .get((caller, token_id))
-                .ok_or(Error::StakeNotFound)?;
-            let rewards = self.pending_stake_rewards(&stake);
-            if rewards == 0 {
-                return Err(Error::NoRewards);
-            }
-            let pool = self.share_reward_pool.get(token_id).unwrap_or(0);
-            if pool < rewards {
-                return Err(Error::InsufficientRewardPool);
-            }
-            self.share_reward_pool
-                .insert(token_id, &pool.saturating_sub(rewards));
-            let new_acc = self.share_acc_reward_per_share.get(token_id).unwrap_or(0);
-            let mut updated = stake.clone();
-            updated.reward_debt = new_acc;
-            self.share_stakes.insert((caller, token_id), &updated);
-            let _ = self.env().transfer(caller, rewards);
-            self.env().emit_event(StakeRewardsClaimed {
-                token_id,
-                staker: caller,
-                amount: rewards,
-            });
-            Ok(rewards)
+            non_reentrant!(self, {
+                let caller = self.env().caller();
+                if self.share_stakes.get((caller, token_id)).is_none() {
+                    return Err(Error::StakeNotFound);
+                }
+                self.update_stake_acc_reward(token_id);
+                let stake = self
+                    .share_stakes
+                    .get((caller, token_id))
+                    .ok_or(Error::StakeNotFound)?;
+                let rewards = self.pending_stake_rewards(&stake);
+                if rewards == 0 {
+                    return Err(Error::NoRewards);
+                }
+                let pool = self.share_reward_pool.get(token_id).unwrap_or(0);
+                if pool < rewards {
+                    return Err(Error::InsufficientRewardPool);
+                }
+                self.share_reward_pool
+                    .insert(token_id, &pool.saturating_sub(rewards));
+                let new_acc = self.share_acc_reward_per_share.get(token_id).unwrap_or(0);
+                let mut updated = stake.clone();
+                updated.reward_debt = new_acc;
+                self.share_stakes.insert((caller, token_id), &updated);
+                let _ = self.env().transfer(caller, rewards);
+                self.env().emit_event(StakeRewardsClaimed {
+                    token_id,
+                    staker: caller,
+                    amount: rewards,
+                });
+                Ok(rewards)
+            })
         }
 
         /// Adds funds to the staking reward pool for `token_id`.
-        ///
-        /// The transferred value is added to the pool; must be > 0.
         #[ink(message, payable)]
         pub fn fund_stake_reward_pool(&mut self, token_id: TokenId) -> Result<(), Error> {
             if self.token_owner.get(token_id).is_none() {
@@ -2803,8 +3527,6 @@ pub mod property_token {
         }
 
         /// Sets the annual reward rate in basis points for `token_id` (admin only).
-        ///
-        /// Flushes accumulated rewards at the previous rate before updating.
         #[ink(message)]
         pub fn set_stake_reward_rate(
             &mut self,
@@ -2839,9 +3561,6 @@ pub mod property_token {
         }
 
         /// Returns the effective governance voting weight for `voter` on `token_id`.
-        ///
-        /// Stakers receive their staked amount × lock-period multiplier;
-        /// non-stakers receive their raw share balance (backward compatible).
         #[ink(message)]
         pub fn get_governance_weight(&self, voter: AccountId, token_id: TokenId) -> u128 {
             self.governance_weight(voter, token_id)
@@ -2850,6 +3569,7 @@ pub mod property_token {
         // ── Staking private helpers (Issue #197) ──────────────────────────
 
         const STAKE_SCALING: u128 = 1_000_000_000_000;
+        const REWARD_RATE_PRECISION: u128 = 10_000; // Basis points precision
 
         fn update_stake_acc_reward(&mut self, token_id: TokenId) {
             let total = self.share_total_staked.get(token_id).unwrap_or(0);
@@ -2864,7 +3584,7 @@ pub mod property_token {
             }
             let rate = self.share_reward_rate_bps.get(token_id).unwrap_or(0);
             let reward = total.saturating_mul(rate).saturating_mul(blocks)
-                / REWARD_RATE_PRECISION
+                / Self::REWARD_RATE_PRECISION
                 / 5_256_000;
             let acc = self.share_acc_reward_per_share.get(token_id).unwrap_or(0);
             self.share_acc_reward_per_share.insert(
@@ -2900,6 +3620,7 @@ pub mod property_token {
 
         /// Creates a vesting schedule for an account
         #[ink(message)]
+        #[allow(clippy::too_many_arguments)]
         pub fn create_vesting_schedule(
             &mut self,
             token_id: TokenId,
@@ -2919,13 +3640,12 @@ pub mod property_token {
                 return Err(Error::InvalidAmount);
             }
             if self.vesting_schedules.get((token_id, account)).is_some() {
-                return Err(Error::Unauthorized); // Schedule already exists
+                return Err(Error::Unauthorized);
             }
 
-            // Deduct fractional shares from the creator's balance
             let creator_balance = self.balances.get((caller, token_id)).unwrap_or(0);
             if creator_balance < total_amount {
-                return Err(Error::Unauthorized); // Insufficient fractional shares
+                return Err(Error::Unauthorized);
             }
             self.balances
                 .insert((caller, token_id), &(creator_balance - total_amount));
@@ -2962,19 +3682,17 @@ pub mod property_token {
             let mut schedule = self
                 .vesting_schedules
                 .get((token_id, caller))
-                .ok_or(Error::Unauthorized)?; // Using Unauthorized generically as there's no custom vesting error yet
+                .ok_or(Error::Unauthorized)?;
 
             let current_time = self.env().block_timestamp();
 
-            // Calculate vested amount
             let vested_amount = if current_time < schedule.start_time + schedule.cliff_duration {
                 0
             } else if current_time >= schedule.start_time + schedule.vesting_duration {
                 schedule.total_amount
             } else {
                 let time_vested = current_time - schedule.start_time;
-                (schedule.total_amount as u128 * time_vested as u128)
-                    / (schedule.vesting_duration as u128)
+                (schedule.total_amount * time_vested as u128) / (schedule.vesting_duration as u128)
             };
 
             let claimable = vested_amount.saturating_sub(schedule.claimed_amount);
@@ -2985,7 +3703,6 @@ pub mod property_token {
             schedule.claimed_amount += claimable;
             self.vesting_schedules.insert((token_id, caller), &schedule);
 
-            // Add the fractional shares to the caller's balance
             let current_balance = self.balances.get((caller, token_id)).unwrap_or(0);
             self.balances
                 .insert((caller, token_id), &(current_balance + claimable));
@@ -3020,7 +3737,7 @@ pub mod property_token {
                     schedule.total_amount
                 } else {
                     let time_vested = current_time - schedule.start_time;
-                    (schedule.total_amount as u128 * time_vested as u128)
+                    (schedule.total_amount * time_vested as u128)
                         / (schedule.vesting_duration as u128)
                 }
             } else {
@@ -3029,6 +3746,4 @@ pub mod property_token {
         }
     }
 
-    // Unit tests extracted to tests.rs (Issue #101)
-    include!("../tests.rs");
 }

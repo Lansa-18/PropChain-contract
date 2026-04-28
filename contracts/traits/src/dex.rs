@@ -6,6 +6,7 @@
 use crate::bridge::BridgeFeeQuote;
 use crate::property::{ChainId, TokenId};
 use ink::prelude::string::String;
+use ink::prelude::vec::Vec;
 use ink::primitives::AccountId;
 
 // =========================================================================
@@ -205,6 +206,99 @@ pub struct VolumeAnalytics {
     pub total_trade_count: u64,
     pub liquidity_base: u128,
     pub liquidity_quote: u128,
+}
+
+// =========================================================================
+// Admin Timelock Types
+// =========================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub enum AdminActionKind {
+    ConfigureBridgeRoute,
+    SetLiquidityMining,
+    UpdateTimelockDelay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub enum AdminActionStatus {
+    Scheduled,
+    Executed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub struct AdminActionPayload {
+    pub destination_chain: ChainId,
+    pub gas_estimate: u64,
+    pub protocol_fee: u128,
+    pub emission_rate: u128,
+    pub start_block: u64,
+    pub end_block: u64,
+    pub reward_token_symbol: String,
+    pub timelock_delay_blocks: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub struct PendingAdminAction {
+    pub action_id: u64,
+    pub kind: AdminActionKind,
+    pub payload: AdminActionPayload,
+    pub proposer: AccountId,
+    pub scheduled_at: u64,
+    pub executable_at: u64,
+    pub status: AdminActionStatus,
+}
+
+// =========================================================================
+// Order Book Visualization Types
+// =========================================================================
+
+#[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub struct OrderBookLevel {
+    pub price: u128,
+    pub total_amount: u128,
+    pub order_count: u32,
+    pub cumulative_amount: u128,
+    pub side: OrderSide,
+}
+
+#[derive(Debug, Clone, PartialEq, scale::Encode, scale::Decode)]
+#[cfg_attr(
+    feature = "std",
+    derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
+)]
+pub struct OrderBookSnapshot {
+    pub pair_id: u64,
+    pub bids: Vec<OrderBookLevel>,
+    pub asks: Vec<OrderBookLevel>,
+    pub best_bid: u128,
+    pub best_ask: u128,
+    pub spread: u128,
+    pub mid_price: u128,
+    pub total_bid_depth: u128,
+    pub total_ask_depth: u128,
+    pub last_price: u128,
+    pub last_updated: u64,
 }
 
 // =========================================================================
