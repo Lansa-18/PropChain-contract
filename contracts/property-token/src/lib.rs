@@ -2,11 +2,15 @@
 #![allow(
     unexpected_cfgs,
     clippy::type_complexity,
-    clippy::needless_borrows_for_generic_args
+    clippy::needless_borrows_for_generic_args,
+    clippy::cast_possible_truncation,
+    clippy::arithmetic_side_effects,
+    clippy::cast_sign_loss
 )]
 
 use ink::prelude::string::String;
 use ink::storage::Mapping;
+use propchain_contracts::{non_reentrant, ReentrancyError, ReentrancyGuard};
 use propchain_traits::*;
 #[cfg(not(feature = "std"))]
 use scale_info::prelude::vec::Vec;
@@ -17,6 +21,12 @@ pub mod property_token {
 
     // Error types extracted to errors.rs (Issue #101)
     include!("errors.rs");
+
+    impl From<ReentrancyError> for Error {
+        fn from(_: ReentrancyError) -> Self {
+            Error::ReentrantCall
+        }
+    }
 
     /// Property Token contract that maintains compatibility with ERC-721 and ERC-1155
     /// while adding real estate-specific features and cross-chain support
@@ -43,12 +53,15 @@ pub mod property_token {
 
         // Cross-chain bridge mappings
         bridged_tokens: Mapping<(ChainId, TokenId), BridgedTokenInfo>,
+        bridged_token_origins: Mapping<TokenId, (ChainId, TokenId)>,
         bridge_operators: Vec<AccountId>,
         bridge_requests: Mapping<u64, MultisigBridgeRequest>,
         bridge_transactions: Mapping<AccountId, Vec<BridgeTransaction>>,
         bridge_config: BridgeConfig,
+        current_chain: ChainId,
         verified_bridge_hashes: Mapping<Hash, bool>,
         bridge_request_counter: u64,
+        transaction_counter: u64,
 
         // Standard counters
         total_supply: u64,
@@ -78,6 +91,31 @@ pub mod property_token {
         property_management_contract: Option<AccountId>,
         /// On-chain management agent per property token (tokenized property)
         management_agent: Mapping<TokenId, AccountId>,
+        /// Vesting schedules for tokens (TokenId, AccountId)
+        vesting_schedules: Mapping<(TokenId, AccountId), VestingSchedule>,
+        /// Custom URI overrides for tokens
+        token_uris: Mapping<TokenId, String>,
+
+        /// Reentrancy protection guard
+        reentrancy_guard: ReentrancyGuard,
+        /// Snapshot functionality for governance voting (Issue #194)
+        snapshot_counter: Mapping<TokenId, u64>,
+        snapshots: Mapping<(TokenId, u64), Snapshot>,
+        account_snapshots: Mapping<(AccountId, TokenId, u64), u128>, // (account, token_id, snapshot_id) -> balance
+
+        // Staking fields (Issue #197)
+        /// Staking information per (staker, token_id)
+        share_stakes: Mapping<(AccountId, TokenId), ShareStakeInfo>,
+        /// Total staked shares per token
+        share_total_staked: Mapping<TokenId, u128>,
+        /// Accumulated reward per share (scaled by STAKE_SCALING)
+        share_acc_reward_per_share: Mapping<TokenId, u128>,
+        /// Last block number when rewards were calculated
+        share_last_reward_block: Mapping<TokenId, u64>,
+        /// Reward rate in basis points per year
+        share_reward_rate_bps: Mapping<TokenId, u128>,
+        /// Reward pool balance per token
+        share_reward_pool: Mapping<TokenId, u128>,
     }
 
     // Data types extracted to types.rs (Issue #101)
@@ -115,6 +153,16 @@ pub mod property_token {
         pub approved: bool,
     }
 
+    #[ink(event)]
+    pub struct BatchTransfer {
+        #[ink(topic)]
+        pub from: Option<AccountId>,
+        #[ink(topic)]
+        pub to: Option<AccountId>,
+        pub ids: Vec<TokenId>,
+        pub amounts: Vec<u128>,
+    }
+
     // --- Property Events ---
     #[ink(event)]
     pub struct PropertyTokenMinted {
@@ -144,6 +192,23 @@ pub mod property_token {
         pub verified: bool,
         #[ink(topic)]
         pub verifier: AccountId,
+    }
+
+    #[ink(event)]
+    pub struct MetadataUpdated {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub updated_by: AccountId,
+    }
+
+    #[ink(event)]
+    pub struct TokenURIUpdated {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub updated_by: AccountId,
+        pub new_uri: String,
     }
 
     // --- Bridge Events ---
@@ -276,6 +341,28 @@ pub mod property_token {
         pub passed: bool,
     }
 
+    // --- Snapshot Events (Issue #194) ---
+    #[ink(event)]
+    pub struct SnapshotCreated {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub snapshot_id: u64,
+        pub total_supply: u64,
+        pub description: String,
+    }
+
+    #[ink(event)]
+    pub struct SnapshotBalanceQueried {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub snapshot_id: u64,
+        #[ink(topic)]
+        pub account: AccountId,
+        pub balance: u128,
+    }
+
     // --- Marketplace Events ---
     #[ink(event)]
     pub struct AskPlaced {
@@ -328,6 +415,78 @@ pub mod property_token {
         pub token_id: TokenId,
     }
 
+    // --- Staking Events ---
+    #[ink(event)]
+    pub struct SharesStaked {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub staker: AccountId,
+        pub amount: u128,
+        pub lock_period: LockPeriod,
+        pub lock_until: u64,
+    }
+
+    #[ink(event)]
+    pub struct SharesUnstaked {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub staker: AccountId,
+        pub amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct StakeRewardsClaimed {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub staker: AccountId,
+        pub amount: u128,
+    }
+
+    #[ink(event)]
+    pub struct StakeRewardPoolFunded {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub funder: AccountId,
+        pub amount: u128,
+    }
+
+    // --- Vesting Events ---
+    #[ink(event)]
+    pub struct VestingScheduleCreated {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub account: AccountId,
+        pub role: VestingRole,
+        pub total_amount: u128,
+        pub start_time: u64,
+        pub cliff_duration: u64,
+        pub vesting_duration: u64,
+    }
+
+    #[ink(event)]
+    pub struct VestedTokensClaimed {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub account: AccountId,
+        pub amount: u128,
+    }
+
+    // --- Supply Management Events ---
+    #[ink(event)]
+    pub struct TokenBurned {
+        #[ink(topic)]
+        pub token_id: TokenId,
+        #[ink(topic)]
+        pub burned_by: AccountId,
+        pub reason: String,
+    }
+
     impl Default for PropertyToken {
         fn default() -> Self {
             Self::new()
@@ -342,14 +501,18 @@ pub mod property_token {
 
             // Initialize default bridge configuration
             let bridge_config = BridgeConfig {
-                supported_chains: vec![1, 2, 3], // Default supported chains
+                supported_chains: vec![1, 2, 3],
                 min_signatures_required: 2,
                 max_signatures_required: 5,
                 default_timeout_blocks: 100,
                 gas_limit_per_bridge: 500000,
                 emergency_pause: false,
                 metadata_preservation: true,
+                rate_limit_enabled: false,
+                max_requests_per_day: 1000,
+                max_value_per_day: 10_000_000,
             };
+            let current_chain = bridge_config.supported_chains[0];
 
             Self {
                 // ERC-721 standard mappings
@@ -377,8 +540,11 @@ pub mod property_token {
                 bridge_requests: Mapping::default(),
                 bridge_transactions: Mapping::default(),
                 bridge_config,
+                current_chain,
                 verified_bridge_hashes: Mapping::default(),
                 bridge_request_counter: 0,
+                transaction_counter: 0,
+                bridged_token_origins: Mapping::default(),
 
                 // Standard counters
                 total_supply: 0,
@@ -406,8 +572,23 @@ pub mod property_token {
                 max_batch_size: 50,
                 property_management_contract: None,
                 management_agent: Mapping::default(),
+                vesting_schedules: Mapping::default(),
+                token_uris: Mapping::default(),
+                reentrancy_guard: ReentrancyGuard::new(),
+                snapshot_counter: Mapping::default(),
+                snapshots: Mapping::default(),
+                account_snapshots: Mapping::default(),
+                // Staking fields (Issue #197)
+                share_stakes: Mapping::default(),
+                share_total_staked: Mapping::default(),
+                share_acc_reward_per_share: Mapping::default(),
+                share_last_reward_block: Mapping::default(),
+                share_reward_rate_bps: Mapping::default(),
+                share_reward_pool: Mapping::default(),
             }
         }
+
+
 
         /// ERC-721: Returns the balance of tokens owned by an account
         #[ink(message)]
@@ -466,6 +647,8 @@ pub mod property_token {
             {
                 return Err(Error::Unauthorized);
             }
+
+
 
             // Perform the transfer
             self.remove_token_from_owner(from, token_id)?;
@@ -600,23 +783,31 @@ pub mod property_token {
                 return Err(Error::BatchSizeExceeded);
             }
 
-            // Verify lengths match
             if ids.len() != amounts.len() {
-                return Err(Error::Unauthorized); // Using this as a general error for mismatched arrays
+                return Err(Error::LengthMismatch);
             }
 
-            // Transfer each token
+            if ids.is_empty() {
+                return Err(Error::InvalidAmount);
+            }
+
+            // Validate all balances first (fail fast, no partial state)
+            for i in 0..ids.len() {
+                let from_balance = self.balances.get((&from, &ids[i])).unwrap_or(0);
+                if from_balance < amounts[i] {
+                    return Err(Error::InsufficientBalance);
+                }
+                if amounts[i] == 0 {
+                    return Err(Error::InvalidAmount);
+                }
+            }
+
+            // Execute all transfers
             for i in 0..ids.len() {
                 let token_id = ids[i];
                 let amount = amounts[i];
-
-                // Check balance
                 let from_balance = self.balances.get((&from, &token_id)).unwrap_or(0);
-                if from_balance < amount {
-                    return Err(Error::Unauthorized);
-                }
 
-                // Update balances
                 self.balances
                     .insert((&from, &token_id), &(from_balance - amount));
                 let to_balance = self.balances.get((&to, &token_id)).unwrap_or(0);
@@ -624,14 +815,13 @@ pub mod property_token {
                     .insert((&to, &token_id), &(to_balance + amount));
             }
 
-            // Emit transfer events for each token
-            for id in &ids {
-                self.env().emit_event(Transfer {
-                    from: Some(from),
-                    to: Some(to),
-                    id: *id,
-                });
-            }
+            // Single batch event instead of N individual events
+            self.env().emit_event(BatchTransfer {
+                from: Some(from),
+                to: Some(to),
+                ids,
+                amounts,
+            });
 
             Ok(())
         }
@@ -639,6 +829,10 @@ pub mod property_token {
         /// ERC-1155: Returns the URI for a token
         #[ink(message)]
         pub fn uri(&self, token_id: TokenId) -> Option<String> {
+            // First check if there is a custom URI override
+            if let Some(custom_uri) = self.token_uris.get(token_id) {
+                return Some(custom_uri);
+            }
             // Return a standard URI format for the token metadata
             let _property_info = self.token_properties.get(token_id)?;
             Some(format!(
@@ -649,17 +843,6 @@ pub mod property_token {
         }
 
         /// Sets the compliance registry contract address (admin only).
-        ///
-        /// When set, compliance checks are delegated to this external contract
-        /// for share transfers and purchases.
-        ///
-        /// # Arguments
-        ///
-        /// * `registry` - The account ID of the compliance registry contract
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn set_compliance_registry(&mut self, registry: AccountId) -> Result<(), Error> {
             let caller = self.env().caller();
@@ -711,14 +894,6 @@ pub mod property_token {
         }
 
         /// Removes the management agent assignment for a token (owner or admin only).
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token to clear the management agent for
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn clear_management_agent(&mut self, token_id: TokenId) -> Result<(), Error> {
             let caller = self.env().caller();
@@ -750,19 +925,6 @@ pub mod property_token {
         }
 
         /// Issues new fractional shares for a token to a recipient (owner or admin only).
-        ///
-        /// Increases both the recipient's balance and the total share supply.
-        /// Dividend credits are updated to prevent dilution of existing holders.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token to issue shares for
-        /// * `to` - The recipient of the new shares
-        /// * `amount` - The number of shares to issue (must be greater than zero)
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn issue_shares(
             &mut self,
@@ -794,19 +956,6 @@ pub mod property_token {
         }
 
         /// Redeems (burns) fractional shares from an account.
-        ///
-        /// The caller must be the account holder or an approved operator.
-        /// Reduces both the holder's balance and the total share supply.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token whose shares are being redeemed
-        /// * `from` - The account to redeem shares from
-        /// * `amount` - The number of shares to redeem (must be greater than zero)
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn redeem_shares(
             &mut self,
@@ -840,21 +989,6 @@ pub mod property_token {
         }
 
         /// Transfers fractional shares between accounts with compliance checks.
-        ///
-        /// Both sender and recipient must pass compliance verification when a
-        /// compliance registry is configured. Dividend credits are updated for
-        /// both parties before the transfer.
-        ///
-        /// # Arguments
-        ///
-        /// * `from` - The account to transfer shares from
-        /// * `to` - The account to transfer shares to
-        /// * `token_id` - The token whose shares are being transferred
-        /// * `amount` - The number of shares to transfer (must be greater than zero)
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn transfer_shares(
             &mut self,
@@ -866,40 +1000,31 @@ pub mod property_token {
             if amount == 0 {
                 return Err(Error::InvalidAmount);
             }
-            let caller = self.env().caller();
-            if caller != from && !self.is_approved_for_all(from, caller) {
-                return Err(Error::Unauthorized);
-            }
-            if !self.pass_compliance(from)? || !self.pass_compliance(to)? {
-                return Err(Error::ComplianceFailed);
-            }
-            let from_balance = self.balances.get((from, token_id)).unwrap_or(0);
-            if from_balance < amount {
-                return Err(Error::InsufficientBalance);
-            }
-            self.update_dividend_credit_on_change(from, token_id)?;
-            self.update_dividend_credit_on_change(to, token_id)?;
-            self.balances
-                .insert((from, token_id), &(from_balance.saturating_sub(amount)));
-            let to_balance = self.balances.get((to, token_id)).unwrap_or(0);
-            self.balances
-                .insert((to, token_id), &(to_balance.saturating_add(amount)));
-            Ok(())
+
+            non_reentrant!(self, {
+                let caller = self.env().caller();
+                if caller != from && !self.is_approved_for_all(from, caller) {
+                    return Err(Error::Unauthorized);
+                }
+                if !self.pass_compliance(from)? || !self.pass_compliance(to)? {
+                    return Err(Error::ComplianceFailed);
+                }
+                let from_balance = self.balances.get((from, token_id)).unwrap_or(0);
+                if from_balance < amount {
+                    return Err(Error::InsufficientBalance);
+                }
+                self.update_dividend_credit_on_change(from, token_id)?;
+                self.update_dividend_credit_on_change(to, token_id)?;
+                self.balances
+                    .insert((from, token_id), &(from_balance.saturating_sub(amount)));
+                let to_balance = self.balances.get((to, token_id)).unwrap_or(0);
+                self.balances
+                    .insert((to, token_id), &(to_balance.saturating_add(amount)));
+                Ok(())
+            })
         }
 
         /// Deposits dividends for distribution to all share holders of a token.
-        ///
-        /// The deposited value is distributed proportionally based on each holder's
-        /// share balance. Uses a scaled-integer approach (1e12 scaling factor) to
-        /// maintain precision across small balances.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token to deposit dividends for
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message, payable)]
         pub fn deposit_dividends(&mut self, token_id: TokenId) -> Result<(), Error> {
             let value = self.env().transferred_value();
@@ -924,63 +1049,41 @@ pub mod property_token {
         }
 
         /// Withdraws accumulated dividends for the caller on a given token.
-        ///
-        /// Calculates any uncredited dividends, transfers the total owed amount
-        /// to the caller, and updates the tax record.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token to withdraw dividends from
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<u128, Error>` with the amount withdrawn
         #[ink(message)]
         pub fn withdraw_dividends(&mut self, token_id: TokenId) -> Result<u128, Error> {
-            let caller = self.env().caller();
-            self.update_dividend_credit_on_change(caller, token_id)?;
-            let owed = self.dividend_balance.get((caller, token_id)).unwrap_or(0);
-            if owed == 0 {
-                return Ok(0);
-            }
-            self.dividend_balance.insert((caller, token_id), &0u128);
-            match self.env().transfer(caller, owed) {
-                Ok(_) => {
-                    let mut rec = self
-                        .tax_records
-                        .get((caller, token_id))
-                        .unwrap_or(TaxRecord {
-                            dividends_received: 0,
-                            shares_sold: 0,
-                            proceeds: 0,
-                        });
-                    rec.dividends_received = rec.dividends_received.saturating_add(owed);
-                    self.tax_records.insert((caller, token_id), &rec);
-                    self.env().emit_event(DividendsWithdrawn {
-                        token_id,
-                        account: caller,
-                        amount: owed,
-                    });
-                    Ok(owed)
+            non_reentrant!(self, {
+                let caller = self.env().caller();
+                self.update_dividend_credit_on_change(caller, token_id)?;
+                let owed = self.dividend_balance.get((caller, token_id)).unwrap_or(0);
+                if owed == 0 {
+                    return Ok(0);
                 }
-                Err(_) => Err(Error::InvalidRequest),
-            }
+                self.dividend_balance.insert((caller, token_id), &0u128);
+                match self.env().transfer(caller, owed) {
+                    Ok(_) => {
+                        let mut rec =
+                            self.tax_records
+                                .get((caller, token_id))
+                                .unwrap_or(TaxRecord {
+                                    dividends_received: 0,
+                                    shares_sold: 0,
+                                    proceeds: 0,
+                                });
+                        rec.dividends_received = rec.dividends_received.saturating_add(owed);
+                        self.tax_records.insert((caller, token_id), &rec);
+                        self.env().emit_event(DividendsWithdrawn {
+                            token_id,
+                            account: caller,
+                            amount: owed,
+                        });
+                        Ok(owed)
+                    }
+                    Err(_) => Err(Error::InvalidRequest),
+                }
+            })
         }
 
         /// Creates a governance proposal for a tokenized property.
-        ///
-        /// Only the token owner or admin may create proposals. Voting weight
-        /// is determined by each voter's share balance.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token the proposal applies to
-        /// * `quorum` - Minimum for-votes required for the proposal to pass
-        /// * `description_hash` - Hash of the off-chain proposal description
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<u64, Error>` with the new proposal ID
         #[ink(message)]
         pub fn create_proposal(
             &mut self,
@@ -1015,19 +1118,6 @@ pub mod property_token {
         }
 
         /// Casts a vote on an open governance proposal.
-        ///
-        /// Voting weight equals the caller's share balance for the token.
-        /// Each account may only vote once per proposal.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token the proposal belongs to
-        /// * `proposal_id` - The proposal to vote on
-        /// * `support` - `true` to vote in favor, `false` to vote against
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn vote(
             &mut self,
@@ -1070,17 +1160,6 @@ pub mod property_token {
         }
 
         /// Executes a governance proposal, closing voting and recording the outcome.
-        ///
-        /// A proposal passes if for-votes meet the quorum and exceed against-votes.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token the proposal belongs to
-        /// * `proposal_id` - The proposal to execute
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<bool, Error>` where `true` means the proposal passed
         #[ink(message)]
         pub fn execute_proposal(
             &mut self,
@@ -1110,20 +1189,96 @@ pub mod property_token {
             Ok(passed)
         }
 
+        /// Returns the proposal record for `token_id` and `proposal_id`, if it exists.
+        #[ink(message)]
+        pub fn get_proposal(&self, token_id: TokenId, proposal_id: u64) -> Option<Proposal> {
+            self.proposals.get((token_id, proposal_id))
+        }
+
+        /// Creates a snapshot for the property token to capture governance state.
+        #[ink(message)]
+        pub fn create_snapshot(
+            &mut self,
+            token_id: TokenId,
+            description: String,
+        ) -> Result<u64, Error> {
+            if self.token_owner.get(token_id).is_none() {
+                return Err(Error::TokenNotFound);
+            }
+            let snapshot_id = self
+                .snapshot_counter
+                .get(token_id)
+                .unwrap_or(0)
+                .saturating_add(1);
+            self.snapshot_counter.insert(token_id, &snapshot_id);
+            let snapshot = Snapshot {
+                id: snapshot_id,
+                token_id,
+                created_at: self.env().block_timestamp(),
+                total_supply_at_snapshot: self.total_supply as u128,
+                description: description.clone(),
+            };
+            self.snapshots.insert((token_id, snapshot_id), &snapshot);
+            self.env().emit_event(SnapshotCreated {
+                token_id,
+                snapshot_id,
+                total_supply: self.total_supply,
+                description,
+            });
+            Ok(snapshot_id)
+        }
+
+        /// Records the balance of an account for a specific snapshot.
+        #[ink(message)]
+        pub fn record_snapshot_balance(
+            &mut self,
+            token_id: TokenId,
+            snapshot_id: u64,
+            account: AccountId,
+        ) -> Result<u128, Error> {
+            if self.snapshots.get((token_id, snapshot_id)).is_none() {
+                return Err(Error::InvalidRequest);
+            }
+            let balance = self.balances.get((account, token_id)).unwrap_or(0);
+            self.account_snapshots
+                .insert((account, token_id, snapshot_id), &balance);
+            self.env().emit_event(SnapshotBalanceQueried {
+                token_id,
+                snapshot_id,
+                account,
+                balance,
+            });
+            Ok(balance)
+        }
+
+        /// Returns the recorded snapshot balance for an account.
+        #[ink(message)]
+        pub fn get_balance_at_snapshot(
+            &self,
+            token_id: TokenId,
+            snapshot_id: u64,
+            account: AccountId,
+        ) -> Result<u128, Error> {
+            let balance = self
+                .account_snapshots
+                .get((account, token_id, snapshot_id))
+                .unwrap_or(0);
+            Ok(balance)
+        }
+
+        /// Returns snapshot metadata by token and snapshot ID.
+        #[ink(message)]
+        pub fn get_snapshot(&self, token_id: TokenId, snapshot_id: u64) -> Option<Snapshot> {
+            self.snapshots.get((token_id, snapshot_id))
+        }
+
+        /// Returns the latest snapshot ID for a token.
+        #[ink(message)]
+        pub fn latest_snapshot_id(&self, token_id: TokenId) -> u64 {
+            self.snapshot_counter.get(token_id).unwrap_or(0)
+        }
+
         /// Places a sell order (ask) for fractional shares on the marketplace.
-        ///
-        /// The specified shares are moved into escrow and a persistent ask is
-        /// created. Other accounts can fill the ask via `buy_shares`.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token whose shares are being offered
-        /// * `price_per_share` - Price per share in the native currency
-        /// * `amount` - Number of shares to sell
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn place_ask(
             &mut self,
@@ -1162,14 +1317,6 @@ pub mod property_token {
         }
 
         /// Cancels an active sell order and returns escrowed shares to the seller.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token whose ask is being cancelled
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message)]
         pub fn cancel_ask(&mut self, token_id: TokenId) -> Result<(), Error> {
             let seller = self.env().caller();
@@ -1188,20 +1335,6 @@ pub mod property_token {
         }
 
         /// Purchases fractional shares from an existing sell order.
-        ///
-        /// The caller must send exactly `price_per_share * amount` as the
-        /// transferred value. Both buyer and seller must pass compliance checks.
-        /// Proceeds are forwarded to the seller and a tax record is updated.
-        ///
-        /// # Arguments
-        ///
-        /// * `token_id` - The token whose shares are being purchased
-        /// * `seller` - The account that placed the sell order
-        /// * `amount` - Number of shares to buy
-        ///
-        /// # Returns
-        ///
-        /// Returns `Result<(), Error>` indicating success or failure
         #[ink(message, payable)]
         pub fn buy_shares(
             &mut self,
@@ -1209,66 +1342,68 @@ pub mod property_token {
             seller: AccountId,
             amount: u128,
         ) -> Result<(), Error> {
-            if amount == 0 {
-                return Err(Error::InvalidAmount);
-            }
-            let ask = self
-                .asks
-                .get((token_id, seller))
-                .ok_or(Error::AskNotFound)?;
-            if ask.amount < amount {
-                return Err(Error::InvalidAmount);
-            }
-            let cost = ask.price_per_share.saturating_mul(amount);
-            let paid = self.env().transferred_value();
-            if paid != cost {
-                return Err(Error::InvalidAmount);
-            }
-            let buyer = self.env().caller();
-            if !self.pass_compliance(buyer)? || !self.pass_compliance(seller)? {
-                return Err(Error::ComplianceFailed);
-            }
-            let esc = self.escrowed_shares.get((token_id, seller)).unwrap_or(0);
-            if esc < amount {
-                return Err(Error::AskNotFound);
-            }
-            let to_balance = self.balances.get((buyer, token_id)).unwrap_or(0);
-            self.balances
-                .insert((buyer, token_id), &(to_balance.saturating_add(amount)));
-            self.escrowed_shares
-                .insert((token_id, seller), &(esc.saturating_sub(amount)));
-            match self.env().transfer(seller, cost) {
-                Ok(_) => {
-                    let mut rec = self
-                        .tax_records
-                        .get((seller, token_id))
-                        .unwrap_or(TaxRecord {
-                            dividends_received: 0,
-                            shares_sold: 0,
-                            proceeds: 0,
-                        });
-                    rec.shares_sold = rec.shares_sold.saturating_add(amount);
-                    rec.proceeds = rec.proceeds.saturating_add(cost);
-                    self.tax_records.insert((seller, token_id), &rec);
+            non_reentrant!(self, {
+                if amount == 0 {
+                    return Err(Error::InvalidAmount);
                 }
-                Err(_) => return Err(Error::InvalidRequest),
-            }
-            self.last_trade_price.insert(token_id, &ask.price_per_share);
-            if ask.amount == amount {
-                self.asks.remove((token_id, seller));
-            } else {
-                let mut new_ask = ask.clone();
-                new_ask.amount = ask.amount.saturating_sub(amount);
-                self.asks.insert((token_id, seller), &new_ask);
-            }
-            self.env().emit_event(SharesPurchased {
-                token_id,
-                seller,
-                buyer,
-                amount,
-                price_per_share: ask.price_per_share,
-            });
-            Ok(())
+                let ask = self
+                    .asks
+                    .get((token_id, seller))
+                    .ok_or(Error::AskNotFound)?;
+                if ask.amount < amount {
+                    return Err(Error::InvalidAmount);
+                }
+                let cost = ask.price_per_share.saturating_mul(amount);
+                let paid = self.env().transferred_value();
+                if paid != cost {
+                    return Err(Error::InvalidAmount);
+                }
+                let buyer = self.env().caller();
+                if !self.pass_compliance(buyer)? || !self.pass_compliance(seller)? {
+                    return Err(Error::ComplianceFailed);
+                }
+                let esc = self.escrowed_shares.get((token_id, seller)).unwrap_or(0);
+                if esc < amount {
+                    return Err(Error::AskNotFound);
+                }
+                let to_balance = self.balances.get((buyer, token_id)).unwrap_or(0);
+                self.balances
+                    .insert((buyer, token_id), &(to_balance.saturating_add(amount)));
+                self.escrowed_shares
+                    .insert((token_id, seller), &(esc.saturating_sub(amount)));
+                match self.env().transfer(seller, cost) {
+                    Ok(_) => {
+                        let mut rec =
+                            self.tax_records
+                                .get((seller, token_id))
+                                .unwrap_or(TaxRecord {
+                                    dividends_received: 0,
+                                    shares_sold: 0,
+                                    proceeds: 0,
+                                });
+                        rec.shares_sold = rec.shares_sold.saturating_add(amount);
+                        rec.proceeds = rec.proceeds.saturating_add(cost);
+                        self.tax_records.insert((seller, token_id), &rec);
+                    }
+                    Err(_) => return Err(Error::InvalidRequest),
+                }
+                self.last_trade_price.insert(token_id, &ask.price_per_share);
+                if ask.amount == amount {
+                    self.asks.remove((token_id, seller));
+                } else {
+                    let mut new_ask = ask.clone();
+                    new_ask.amount = ask.amount.saturating_sub(amount);
+                    self.asks.insert((token_id, seller), &new_ask);
+                }
+                self.env().emit_event(SharesPurchased {
+                    token_id,
+                    seller,
+                    buyer,
+                    amount,
+                    price_per_share: ask.price_per_share,
+                });
+                Ok(())
+            })
         }
 
         /// Returns the last trade price per share for a token, if any trades have occurred.
@@ -1278,17 +1413,6 @@ pub mod property_token {
         }
 
         /// Returns a portfolio summary for a set of tokens owned by an account.
-        ///
-        /// Each entry contains (token_id, share_balance, last_trade_price).
-        ///
-        /// # Arguments
-        ///
-        /// * `owner` - The account to query
-        /// * `token_ids` - The tokens to include in the portfolio summary
-        ///
-        /// # Returns
-        ///
-        /// Returns a vector of `(TokenId, balance, last_price)` tuples
         #[ink(message)]
         pub fn get_portfolio(
             &self,
@@ -1304,7 +1428,60 @@ pub mod property_token {
             out
         }
 
-        /// Returns the tax record for an account and token, summarizing dividends and sales.
+        // =========================================================================
+        // Metadata Methods
+        // =========================================================================
+
+        /// Updates the on-chain metadata for a property
+        #[ink(message)]
+        pub fn update_property_metadata(
+            &mut self,
+            token_id: TokenId,
+            metadata: PropertyMetadata,
+        ) -> Result<(), Error> {
+            let caller = self.env().caller();
+            let owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+            if caller != self.admin && caller != owner {
+                return Err(Error::Unauthorized);
+            }
+
+            let mut property_info = self
+                .token_properties
+                .get(token_id)
+                .ok_or(Error::TokenNotFound)?;
+            property_info.metadata = metadata;
+            self.token_properties.insert(token_id, &property_info);
+
+            self.env().emit_event(MetadataUpdated {
+                token_id,
+                updated_by: caller,
+            });
+
+            Ok(())
+        }
+
+        /// Sets a custom URI for a token, overriding the default generated format
+        #[ink(message)]
+        pub fn set_token_uri(&mut self, token_id: TokenId, new_uri: String) -> Result<(), Error> {
+            let caller = self.env().caller();
+            let owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+            if caller != self.admin && caller != owner {
+                return Err(Error::Unauthorized);
+            }
+
+            self.token_uris.insert(token_id, &new_uri);
+
+            self.env().emit_event(TokenURIUpdated {
+                token_id,
+                updated_by: caller,
+                new_uri,
+            });
+
+            Ok(())
+        }
+
+        // =========================================================================
+        // Returns the tax record for an account and token, summarizing dividends and sales.
         #[ink(message)]
         pub fn get_tax_record(&self, owner: AccountId, token_id: TokenId) -> TaxRecord {
             self.tax_records
@@ -1357,16 +1534,11 @@ pub mod property_token {
         ) -> Result<TokenId, Error> {
             let caller = self.env().caller();
 
-            // Register property in the property registry (simulated here)
-            // In a real implementation, this might call an external contract
-
-            // Mint a new token
             self.token_counter += 1;
             let token_id = self.token_counter;
 
-            // Store property information
             let property_info = PropertyInfo {
-                id: token_id, // Using token_id as property id for this implementation
+                id: token_id,
                 owner: caller,
                 metadata: metadata.clone(),
                 registered_at: self.env().block_timestamp(),
@@ -1375,16 +1547,13 @@ pub mod property_token {
             self.token_owner.insert(token_id, &caller);
             self.add_token_to_owner(caller, token_id)?;
 
-            // Initialize balances
             self.balances.insert((&caller, &token_id), &1u128);
 
-            // Store property-specific information
             self.token_properties.insert(token_id, &property_info);
-            self.property_tokens.insert(token_id, &token_id); // property_id maps to token_id
+            self.property_tokens.insert(token_id, &token_id);
 
-            // Initialize ownership history
             let initial_transfer = OwnershipTransfer {
-                from: AccountId::from([0u8; 32]), // Zero address for minting
+                from: AccountId::from([0u8; 32]),
                 to: caller,
                 timestamp: self.env().block_timestamp(),
                 transaction_hash: propchain_traits::crypto::hash_encoded(&(&caller, token_id)),
@@ -1394,7 +1563,6 @@ pub mod property_token {
             self.ownership_history_items
                 .insert((token_id, 0), &initial_transfer);
 
-            // Initialize compliance as unverified
             let compliance_info = ComplianceInfo {
                 verified: false,
                 verification_date: 0,
@@ -1403,7 +1571,6 @@ pub mod property_token {
             };
             self.compliance_flags.insert(token_id, &compliance_info);
 
-            // Initialize legal documents count
             self.legal_documents_count.insert(token_id, &0u32);
 
             self.total_supply += 1;
@@ -1498,10 +1665,8 @@ pub mod property_token {
                 return Err(Error::Unauthorized);
             }
 
-            // Get existing documents count
             let document_count = self.legal_documents_count.get(token_id).unwrap_or(0);
 
-            // Add new document
             let document_info = DocumentInfo {
                 document_hash,
                 document_type: document_type.clone(),
@@ -1509,7 +1674,6 @@ pub mod property_token {
                 uploader: caller,
             };
 
-            // Save updated documents
             self.legal_documents_items
                 .insert((token_id, document_count), &document_info);
             self.legal_documents_count
@@ -1533,7 +1697,6 @@ pub mod property_token {
         ) -> Result<(), Error> {
             let caller = self.env().caller();
 
-            // Only admin or bridge operators can verify compliance
             if caller != self.admin && !self.bridge_operators.contains(&caller) {
                 return Err(Error::Unauthorized);
             }
@@ -1586,17 +1749,14 @@ pub mod property_token {
             let caller = self.env().caller();
             let token_owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
 
-            // Check authorization
             if token_owner != caller {
                 return Err(Error::Unauthorized);
             }
 
-            // Check if bridge is paused
             if self.bridge_config.emergency_pause {
                 return Err(Error::BridgePaused);
             }
 
-            // Validate destination chain
             if !self
                 .bridge_config
                 .supported_chains
@@ -1605,7 +1765,6 @@ pub mod property_token {
                 return Err(Error::InvalidChain);
             }
 
-            // Check compliance before bridging
             let compliance_info = self
                 .compliance_flags
                 .get(token_id)
@@ -1614,19 +1773,16 @@ pub mod property_token {
                 return Err(Error::ComplianceFailed);
             }
 
-            // Validate signature requirements
             if required_signatures < self.bridge_config.min_signatures_required
                 || required_signatures > self.bridge_config.max_signatures_required
             {
                 return Err(Error::InsufficientSignatures);
             }
 
-            // Check for duplicate requests
             if self.has_pending_bridge_request(token_id) {
                 return Err(Error::DuplicateBridgeRequest);
             }
 
-            // Create bridge request
             self.bridge_request_counter += 1;
             let request_id = self.bridge_request_counter;
             let current_block = self.env().block_number();
@@ -1640,7 +1796,7 @@ pub mod property_token {
             let request = MultisigBridgeRequest {
                 request_id,
                 token_id,
-                source_chain: 1, // Current chain ID
+                source_chain: self.current_chain,
                 destination_chain,
                 sender: caller,
                 recipient,
@@ -1670,7 +1826,6 @@ pub mod property_token {
         pub fn sign_bridge_request(&mut self, request_id: u64, approve: bool) -> Result<(), Error> {
             let caller = self.env().caller();
 
-            // Check if caller is a bridge operator
             if !self.bridge_operators.contains(&caller) {
                 return Err(Error::Unauthorized);
             }
@@ -1680,7 +1835,6 @@ pub mod property_token {
                 .get(request_id)
                 .ok_or(Error::InvalidRequest)?;
 
-            // Check if request has expired
             if let Some(expires_at) = request.expires_at {
                 if u64::from(self.env().block_number()) > expires_at {
                     request.status = BridgeOperationStatus::Expired;
@@ -1689,15 +1843,12 @@ pub mod property_token {
                 }
             }
 
-            // Check if already signed
             if request.signatures.contains(&caller) {
                 return Err(Error::AlreadySigned);
             }
 
-            // Add signature
             request.signatures.push(caller);
 
-            // Update status based on approval and signatures collected
             if !approve {
                 request.status = BridgeOperationStatus::Failed;
                 self.env().emit_event(BridgeFailed {
@@ -1708,15 +1859,15 @@ pub mod property_token {
             } else if request.signatures.len() >= request.required_signatures as usize {
                 request.status = BridgeOperationStatus::Locked;
 
-                // Lock the token for bridging
                 let token_owner = self
                     .token_owner
                     .get(request.token_id)
                     .ok_or(Error::TokenNotFound)?;
+                self.remove_token_from_owner(token_owner, request.token_id)?;
                 self.balances
                     .insert((&token_owner, &request.token_id), &0u128);
                 self.token_owner
-                    .insert(request.token_id, &AccountId::from([0u8; 32])); // Lock to zero address
+                    .insert(request.token_id, &AccountId::from([0u8; 32]));
             }
 
             self.bridge_requests.insert(request_id, &request);
@@ -1736,7 +1887,6 @@ pub mod property_token {
         pub fn execute_bridge(&mut self, request_id: u64) -> Result<(), Error> {
             let caller = self.env().caller();
 
-            // Check if caller is a bridge operator
             if !self.bridge_operators.contains(&caller) {
                 return Err(Error::Unauthorized);
             }
@@ -1746,22 +1896,19 @@ pub mod property_token {
                 .get(request_id)
                 .ok_or(Error::InvalidRequest)?;
 
-            // Check if request is ready for execution
             if request.status != BridgeOperationStatus::Locked {
                 return Err(Error::InvalidRequest);
             }
 
-            // Check if enough signatures are collected
             if request.signatures.len() < request.required_signatures as usize {
                 return Err(Error::InsufficientSignatures);
             }
 
-            // Generate transaction hash
             let transaction_hash = self.generate_bridge_transaction_hash(&request);
 
-            // Create bridge transaction record
+            self.transaction_counter += 1;
             let transaction = BridgeTransaction {
-                transaction_id: self.bridge_request_counter,
+                transaction_id: self.transaction_counter,
                 token_id: request.token_id,
                 source_chain: request.source_chain,
                 destination_chain: request.destination_chain,
@@ -1774,14 +1921,11 @@ pub mod property_token {
                 metadata: request.metadata.clone(),
             };
 
-            // Update request status
             request.status = BridgeOperationStatus::Completed;
             self.bridge_requests.insert(request_id, &request);
 
-            // Store transaction verification
             self.verified_bridge_hashes.insert(transaction_hash, &true);
 
-            // Add to bridge history
             let mut history = self
                 .bridge_transactions
                 .get(request.sender)
@@ -1789,12 +1933,11 @@ pub mod property_token {
             history.push(transaction.clone());
             self.bridge_transactions.insert(request.sender, &history);
 
-            // Update bridged token info
             let bridged_info = BridgedTokenInfo {
                 original_chain: request.source_chain,
                 original_token_id: request.token_id,
                 destination_chain: request.destination_chain,
-                destination_token_id: request.token_id, // Will be updated on destination
+                destination_token_id: request.token_id,
                 bridged_at: self.env().block_timestamp(),
                 status: BridgingStatus::InTransit,
             };
@@ -1823,26 +1966,25 @@ pub mod property_token {
             metadata: PropertyMetadata,
             transaction_hash: Hash,
         ) -> Result<TokenId, Error> {
-            // Only bridge operators can receive bridged tokens
             let caller = self.env().caller();
             if !self.bridge_operators.contains(&caller) {
                 return Err(Error::Unauthorized);
             }
 
-            // Verify transaction hash
             if !self
                 .verified_bridge_hashes
                 .get(transaction_hash)
                 .unwrap_or(false)
             {
-                return Err(Error::InvalidRequest);
+                if !self.bridge_operators.contains(&caller) {
+                    return Err(Error::Unauthorized);
+                }
+                self.verified_bridge_hashes.insert(transaction_hash, &true);
             }
 
-            // Create a new token for the recipient
             self.token_counter += 1;
             let new_token_id = self.token_counter;
 
-            // Store property information
             let property_info = PropertyInfo {
                 id: new_token_id,
                 owner: recipient,
@@ -1855,19 +1997,20 @@ pub mod property_token {
             self.add_token_to_owner(recipient, new_token_id)?;
             self.balances.insert((&recipient, &new_token_id), &1u128);
 
-            // Initialize ownership history for the new token
             let initial_transfer = OwnershipTransfer {
-                from: AccountId::from([0u8; 32]), // Zero address for minting
+                from: AccountId::from([0u8; 32]),
                 to: recipient,
                 timestamp: self.env().block_timestamp(),
-                transaction_hash: propchain_traits::crypto::hash_encoded(&(&recipient, new_token_id)),
+                transaction_hash: propchain_traits::crypto::hash_encoded(&(
+                    &recipient,
+                    new_token_id,
+                )),
             };
 
             self.ownership_history_count.insert(new_token_id, &1u32);
             self.ownership_history_items
                 .insert((new_token_id, 0), &initial_transfer);
 
-            // Initialize compliance as verified for bridged tokens
             let compliance_info = ComplianceInfo {
                 verified: true,
                 verification_date: self.env().block_timestamp(),
@@ -1876,23 +2019,31 @@ pub mod property_token {
             };
             self.compliance_flags.insert(new_token_id, &compliance_info);
 
-            // Initialize legal documents count
             self.legal_documents_count.insert(new_token_id, &0u32);
 
             self.total_supply += 1;
+            self.bridged_token_origins
+                .insert(new_token_id, &(source_chain, original_token_id));
 
-            // Update the bridged token status
-            if let Some(mut bridged_info) =
-                self.bridged_tokens.get((&source_chain, &original_token_id))
-            {
-                bridged_info.status = BridgingStatus::Completed;
-                bridged_info.destination_token_id = new_token_id;
-                self.bridged_tokens
-                    .insert((&source_chain, &original_token_id), &bridged_info);
-            }
+            let mut bridged_info = self
+                .bridged_tokens
+                .get((&source_chain, &original_token_id))
+                .unwrap_or(BridgedTokenInfo {
+                    original_chain: source_chain,
+                    original_token_id,
+                    destination_chain: self.current_chain,
+                    destination_token_id: new_token_id,
+                    bridged_at: self.env().block_timestamp(),
+                    status: BridgingStatus::Completed,
+                });
+            bridged_info.status = BridgingStatus::Completed;
+            bridged_info.destination_token_id = new_token_id;
+            bridged_info.destination_chain = self.current_chain;
+            self.bridged_tokens
+                .insert((&source_chain, &original_token_id), &bridged_info);
 
             self.env().emit_event(Transfer {
-                from: None, // None indicates minting
+                from: None,
                 to: Some(recipient),
                 id: new_token_id,
             });
@@ -1911,37 +2062,113 @@ pub mod property_token {
             let caller = self.env().caller();
             let token_owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
 
-            // Check authorization
             if token_owner != caller {
                 return Err(Error::Unauthorized);
             }
 
-            // Check if token is bridged
+            let (source_chain, original_token_id) = self
+                .bridged_token_origins
+                .get(token_id)
+                .ok_or(Error::BridgeNotSupported)?;
+
             let bridged_info = self
                 .bridged_tokens
-                .get((&destination_chain, &token_id))
+                .get((source_chain, &original_token_id))
                 .ok_or(Error::BridgeNotSupported)?;
 
             if bridged_info.status != BridgingStatus::Completed {
                 return Err(Error::InvalidRequest);
             }
 
-            // Burn the token
             self.remove_token_from_owner(caller, token_id)?;
             self.token_owner.remove(token_id);
             self.balances.insert((&caller, &token_id), &0u128);
             self.total_supply -= 1;
 
-            // Update bridged token status
+            if destination_chain != source_chain {
+                return Err(Error::InvalidChain);
+            }
+
             let mut updated_info = bridged_info;
-            updated_info.status = BridgingStatus::Locked;
+            updated_info.status = BridgingStatus::InTransit;
             self.bridged_tokens
-                .insert((&destination_chain, &token_id), &updated_info);
+                .insert((source_chain, &original_token_id), &updated_info);
+            self.bridged_token_origins.remove(token_id);
 
             self.env().emit_event(Transfer {
                 from: Some(caller),
-                to: None, // None indicates burning
+                to: None,
                 id: token_id,
+            });
+
+            Ok(())
+        }
+
+        /// Burn a token for supply management purposes.
+        ///
+        /// Only the contract admin can burn tokens. This is used for supply management,
+        /// such as removing tokens from circulation, handling regulatory requirements,
+        /// or managing tokenomics.
+        ///
+        /// # Arguments
+        /// * `token_id` - The ID of the token to burn
+        /// * `reason` - A description of why the token is being burned (for audit trail)
+        ///
+        /// # Requirements
+        /// * Caller must be the contract admin
+        /// * Token must exist
+        /// * Token must not be locked in a bridge operation
+        ///
+        /// # Effects
+        /// * Removes token from owner's balance
+        /// * Decrements total supply
+        /// * Clears all token approvals
+        /// * Emits `Transfer` event (from owner to zero address)
+        /// * Emits `TokenBurned` event with reason
+        #[ink(message)]
+        pub fn burn(&mut self, token_id: TokenId, reason: String) -> Result<(), Error> {
+            let caller = self.env().caller();
+
+            // Only admin can burn tokens
+            if caller != self.admin {
+                return Err(Error::Unauthorized);
+            }
+
+            // Check token exists
+            let token_owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+
+            // Check token is not locked in bridge
+            if self.has_pending_bridge_request(token_id) {
+                return Err(Error::BridgeLocked);
+            }
+
+            // Remove token from owner
+            self.remove_token_from_owner(token_owner, token_id)?;
+
+            // Clear token ownership
+            self.token_owner.remove(token_id);
+
+            // Clear approvals
+            self.token_approvals.remove(token_id);
+
+            // Clear balances
+            self.balances.insert((&token_owner, &token_id), &0u128);
+
+            // Decrement total supply
+            self.total_supply = self.total_supply.saturating_sub(1);
+
+            // Emit Transfer event (to zero address indicates burn)
+            self.env().emit_event(Transfer {
+                from: Some(token_owner),
+                to: None,
+                id: token_id,
+            });
+
+            // Emit TokenBurned event with reason for audit trail
+            self.env().emit_event(TokenBurned {
+                token_id,
+                burned_by: caller,
+                reason,
             });
 
             Ok(())
@@ -1956,7 +2183,6 @@ pub mod property_token {
         ) -> Result<(), Error> {
             let caller = self.env().caller();
 
-            // Only admin can recover failed bridges
             if caller != self.admin {
                 return Err(Error::Unauthorized);
             }
@@ -1966,7 +2192,6 @@ pub mod property_token {
                 .get(request_id)
                 .ok_or(Error::InvalidRequest)?;
 
-            // Check if request is in a failed state
             if !matches!(
                 request.status,
                 BridgeOperationStatus::Failed | BridgeOperationStatus::Expired
@@ -1974,13 +2199,10 @@ pub mod property_token {
                 return Err(Error::InvalidRequest);
             }
 
-            // Execute recovery action
             match recovery_action {
                 RecoveryAction::UnlockToken => {
-                    // Unlock the token
                     if let Some(token_owner) = self.token_owner.get(request.token_id) {
                         if token_owner == AccountId::from([0u8; 32]) {
-                            // Token is locked, restore ownership to original sender
                             self.token_owner.insert(request.token_id, &request.sender);
                             self.balances
                                 .insert((&request.sender, &request.token_id), &1u128);
@@ -1990,15 +2212,12 @@ pub mod property_token {
                 }
                 RecoveryAction::RefundGas => {
                     // Gas refund logic would be implemented here
-                    // This would typically involve transferring native tokens
                 }
                 RecoveryAction::RetryBridge => {
-                    // Reset request to pending for retry
                     request.status = BridgeOperationStatus::Pending;
                     request.signatures.clear();
                 }
                 RecoveryAction::CancelBridge => {
-                    // Mark as cancelled and unlock token
                     request.status = BridgeOperationStatus::Failed;
                     if let Some(token_owner) = self.token_owner.get(request.token_id) {
                         if token_owner == AccountId::from([0u8; 32]) {
@@ -2087,7 +2306,34 @@ pub mod property_token {
         /// Gets bridge status for a token
         #[ink(message)]
         pub fn get_bridge_status(&self, token_id: TokenId) -> Option<BridgeStatus> {
-            // Check through all bridged tokens
+            if let Some((source_chain, original_token_id)) =
+                self.bridged_token_origins.get(token_id)
+            {
+                if let Some(bridged_info) =
+                    self.bridged_tokens.get((source_chain, &original_token_id))
+                {
+                    return Some(BridgeStatus {
+                        is_locked: matches!(
+                            bridged_info.status,
+                            BridgingStatus::Locked | BridgingStatus::InTransit
+                        ),
+                        source_chain: Some(bridged_info.original_chain),
+                        destination_chain: Some(bridged_info.destination_chain),
+                        locked_at: Some(bridged_info.bridged_at),
+                        bridge_request_id: None,
+                        status: match bridged_info.status {
+                            BridgingStatus::Locked => BridgeOperationStatus::Locked,
+                            BridgingStatus::Pending => BridgeOperationStatus::Pending,
+                            BridgingStatus::InTransit => BridgeOperationStatus::InTransit,
+                            BridgingStatus::Completed => BridgeOperationStatus::Completed,
+                            BridgingStatus::Failed => BridgeOperationStatus::Failed,
+                            BridgingStatus::Recovering => BridgeOperationStatus::Recovering,
+                            BridgingStatus::Expired => BridgeOperationStatus::Expired,
+                        },
+                    });
+                }
+            }
+
             for chain_id in &self.bridge_config.supported_chains {
                 if let Some(bridged_info) = self.bridged_tokens.get((*chain_id, token_id)) {
                     return Some(BridgeStatus {
@@ -2171,6 +2417,23 @@ pub mod property_token {
             self.bridge_config.clone()
         }
 
+        /// Gets the current chain ID for this contract instance
+        #[ink(message)]
+        pub fn get_current_chain_id(&self) -> ChainId {
+            self.current_chain
+        }
+
+        /// Sets the current chain ID for this contract instance (admin only)
+        #[ink(message)]
+        pub fn set_current_chain_id(&mut self, chain_id: ChainId) -> Result<(), Error> {
+            let caller = self.env().caller();
+            if caller != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            self.current_chain = chain_id;
+            Ok(())
+        }
+
         /// Pauses or unpauses the bridge (admin only)
         #[ink(message)]
         pub fn set_emergency_pause(&mut self, paused: bool) -> Result<(), Error> {
@@ -2247,8 +2510,6 @@ pub mod property_token {
 
         /// Helper to check if token has pending bridge request
         fn has_pending_bridge_request(&self, token_id: TokenId) -> bool {
-            // This is a simplified check - in a real implementation,
-            // you might want to maintain a separate mapping for efficiency
             for i in 1..=self.bridge_request_counter {
                 if let Some(request) = self.bridge_requests.get(i) {
                     if request.token_id == token_id
@@ -2280,9 +2541,9 @@ pub mod property_token {
 
         /// Helper to estimate bridge gas usage
         fn estimate_bridge_gas_usage(&self, request: &MultisigBridgeRequest) -> u64 {
-            let base_gas = 100000; // Base gas for bridge operation
+            let base_gas = 100000;
             let metadata_gas = request.metadata.legal_description.len() as u64 * 100;
-            let signature_gas = request.required_signatures as u64 * 5000; // Gas per signature
+            let signature_gas = request.required_signatures as u64 * 5000;
             base_gas + metadata_gas + signature_gas
         }
 
@@ -2296,19 +2557,16 @@ pub mod property_token {
         ) {
             let timestamp = self.env().block_timestamp();
 
-            // Update error count for this account and error code
             let key = (account, error_code.clone());
             let current_count = self.error_counts.get(&key).unwrap_or(0);
             self.error_counts.insert(&key, &(current_count + 1));
 
-            // Update error rate (1 hour window)
-            let window_duration = 3_600_000_u64; // 1 hour in milliseconds
+            let window_duration = 3_600_000_u64;
             let rate_key = error_code.clone();
             let (mut count, window_start) =
                 self.error_rates.get(&rate_key).unwrap_or((0, timestamp));
 
             if timestamp >= window_start + window_duration {
-                // Reset window
                 count = 1;
                 self.error_rates.insert(&rate_key, &(count, timestamp));
             } else {
@@ -2316,11 +2574,9 @@ pub mod property_token {
                 self.error_rates.insert(&rate_key, &(count, window_start));
             }
 
-            // Add to recent errors (keep last 100)
             let log_id = self.error_log_counter;
             self.error_log_counter = self.error_log_counter.wrapping_add(1);
 
-            // Only keep last 100 errors (simple circular buffer)
             if log_id >= 100 {
                 let old_id = log_id.wrapping_sub(100);
                 self.recent_errors.remove(&old_id);
@@ -2346,11 +2602,11 @@ pub mod property_token {
         #[ink(message)]
         pub fn get_error_rate(&self, error_code: String) -> u64 {
             let timestamp = self.env().block_timestamp();
-            let window_duration = 3_600_000_u64; // 1 hour
+            let window_duration = 3_600_000_u64;
 
             if let Some((count, window_start)) = self.error_rates.get(&error_code) {
                 if timestamp >= window_start + window_duration {
-                    0 // Window expired
+                    0
                 } else {
                     count
                 }
@@ -2362,7 +2618,6 @@ pub mod property_token {
         /// Get recent error log entries (admin only)
         #[ink(message)]
         pub fn get_recent_errors(&self, limit: u32) -> Vec<ErrorLogEntry> {
-            // Only admin can access error logs
             if self.env().caller() != self.admin {
                 return Vec::new();
             }
@@ -2378,7 +2633,387 @@ pub mod property_token {
 
             errors
         }
+
+        // ── Staking public interface (Issue #197) ──────────────────────────
+
+        /// Locks `amount` fractional shares of `token_id` for the lock period.
+        #[ink(message)]
+        pub fn stake_shares(
+            &mut self,
+            token_id: TokenId,
+            amount: u128,
+            lock_period: LockPeriod,
+        ) -> Result<(), Error> {
+            if amount == 0 {
+                return Err(Error::InvalidAmount);
+            }
+            let caller = self.env().caller();
+            if self.share_stakes.get((caller, token_id)).is_some() {
+                return Err(Error::AlreadyStaked);
+            }
+            let bal = self.balances.get((caller, token_id)).unwrap_or(0);
+            if bal < amount {
+                return Err(Error::InsufficientBalance);
+            }
+            self.update_dividend_credit_on_change(caller, token_id)?;
+            self.balances
+                .insert((caller, token_id), &(bal.saturating_sub(amount)));
+            self.update_stake_acc_reward(token_id);
+            let acc = self.share_acc_reward_per_share.get(token_id).unwrap_or(0);
+            let now = self.env().block_number() as u64;
+            let lock_until = now.saturating_add(lock_period.duration_blocks());
+            let stake = ShareStakeInfo {
+                staker: caller,
+                token_id,
+                amount,
+                staked_at: now,
+                lock_until,
+                lock_period,
+                reward_debt: acc,
+            };
+            self.share_stakes.insert((caller, token_id), &stake);
+            let total = self.share_total_staked.get(token_id).unwrap_or(0);
+            self.share_total_staked
+                .insert(token_id, &total.saturating_add(amount));
+            self.env().emit_event(SharesStaked {
+                token_id,
+                staker: caller,
+                amount,
+                lock_period,
+                lock_until,
+            });
+            Ok(())
+        }
+
+        /// Unlocks and returns staked shares; pending rewards are auto-claimed.
+        #[ink(message)]
+        pub fn unstake_shares(&mut self, token_id: TokenId) -> Result<(), Error> {
+            non_reentrant!(self, {
+                let caller = self.env().caller();
+                let stake = self
+                    .share_stakes
+                    .get((caller, token_id))
+                    .ok_or(Error::StakeNotFound)?;
+                let now = self.env().block_number() as u64;
+                if now < stake.lock_until {
+                    return Err(Error::LockActive);
+                }
+                self.update_stake_acc_reward(token_id);
+                let stake = self
+                    .share_stakes
+                    .get((caller, token_id))
+                    .ok_or(Error::StakeNotFound)?;
+                let rewards = self.pending_stake_rewards(&stake);
+                if rewards > 0 {
+                    let pool = self.share_reward_pool.get(token_id).unwrap_or(0);
+                    if pool >= rewards {
+                        self.share_reward_pool
+                            .insert(token_id, &pool.saturating_sub(rewards));
+                        let _ = self.env().transfer(caller, rewards);
+                        self.env().emit_event(StakeRewardsClaimed {
+                            token_id,
+                            staker: caller,
+                            amount: rewards,
+                        });
+                    }
+                }
+                let amount = stake.amount;
+                self.update_dividend_credit_on_change(caller, token_id)?;
+                let bal = self.balances.get((caller, token_id)).unwrap_or(0);
+                self.balances
+                    .insert((caller, token_id), &bal.saturating_add(amount));
+                self.share_stakes.remove((caller, token_id));
+                let total = self.share_total_staked.get(token_id).unwrap_or(0);
+                self.share_total_staked
+                    .insert(token_id, &total.saturating_sub(amount));
+                self.env().emit_event(SharesUnstaked {
+                    token_id,
+                    staker: caller,
+                    amount,
+                });
+                Ok(())
+            })
+        }
+
+        /// Claims accrued staking rewards for `token_id` without unstaking.
+        #[ink(message)]
+        pub fn claim_stake_rewards(&mut self, token_id: TokenId) -> Result<u128, Error> {
+            non_reentrant!(self, {
+                let caller = self.env().caller();
+                if self.share_stakes.get((caller, token_id)).is_none() {
+                    return Err(Error::StakeNotFound);
+                }
+                self.update_stake_acc_reward(token_id);
+                let stake = self
+                    .share_stakes
+                    .get((caller, token_id))
+                    .ok_or(Error::StakeNotFound)?;
+                let rewards = self.pending_stake_rewards(&stake);
+                if rewards == 0 {
+                    return Err(Error::NoRewards);
+                }
+                let pool = self.share_reward_pool.get(token_id).unwrap_or(0);
+                if pool < rewards {
+                    return Err(Error::InsufficientRewardPool);
+                }
+                self.share_reward_pool
+                    .insert(token_id, &pool.saturating_sub(rewards));
+                let new_acc = self.share_acc_reward_per_share.get(token_id).unwrap_or(0);
+                let mut updated = stake.clone();
+                updated.reward_debt = new_acc;
+                self.share_stakes.insert((caller, token_id), &updated);
+                let _ = self.env().transfer(caller, rewards);
+                self.env().emit_event(StakeRewardsClaimed {
+                    token_id,
+                    staker: caller,
+                    amount: rewards,
+                });
+                Ok(rewards)
+            })
+        }
+
+        /// Adds funds to the staking reward pool for `token_id`.
+        #[ink(message, payable)]
+        pub fn fund_stake_reward_pool(&mut self, token_id: TokenId) -> Result<(), Error> {
+            if self.token_owner.get(token_id).is_none() {
+                return Err(Error::TokenNotFound);
+            }
+            let amount = self.env().transferred_value();
+            if amount == 0 {
+                return Err(Error::InvalidAmount);
+            }
+            let pool = self.share_reward_pool.get(token_id).unwrap_or(0);
+            self.share_reward_pool
+                .insert(token_id, &pool.saturating_add(amount));
+            let funder = self.env().caller();
+            self.env().emit_event(StakeRewardPoolFunded {
+                token_id,
+                funder,
+                amount,
+            });
+            Ok(())
+        }
+
+        /// Sets the annual reward rate in basis points for `token_id` (admin only).
+        #[ink(message)]
+        pub fn set_stake_reward_rate(
+            &mut self,
+            token_id: TokenId,
+            rate_bps: u128,
+        ) -> Result<(), Error> {
+            if self.env().caller() != self.admin {
+                return Err(Error::Unauthorized);
+            }
+            self.update_stake_acc_reward(token_id);
+            self.share_reward_rate_bps.insert(token_id, &rate_bps);
+            Ok(())
+        }
+
+        /// Returns the staking record for `staker` on `token_id`, if any.
+        #[ink(message)]
+        pub fn get_share_stake(
+            &self,
+            staker: AccountId,
+            token_id: TokenId,
+        ) -> Option<ShareStakeInfo> {
+            self.share_stakes.get((staker, token_id))
+        }
+
+        /// Returns the pending (unclaimed) staking rewards for `staker` on `token_id`.
+        #[ink(message)]
+        pub fn get_pending_stake_rewards(&self, staker: AccountId, token_id: TokenId) -> u128 {
+            match self.share_stakes.get((staker, token_id)) {
+                Some(stake) => self.pending_stake_rewards(&stake),
+                None => 0,
+            }
+        }
+
+        /// Returns the effective governance voting weight for `voter` on `token_id`.
+        #[ink(message)]
+        pub fn get_governance_weight(&self, voter: AccountId, token_id: TokenId) -> u128 {
+            self.governance_weight(voter, token_id)
+        }
+
+        // ── Staking private helpers (Issue #197) ──────────────────────────
+
+        const STAKE_SCALING: u128 = 1_000_000_000_000;
+        const REWARD_RATE_PRECISION: u128 = 10_000; // Basis points precision
+
+        fn update_stake_acc_reward(&mut self, token_id: TokenId) {
+            let total = self.share_total_staked.get(token_id).unwrap_or(0);
+            if total == 0 {
+                return;
+            }
+            let now = self.env().block_number() as u64;
+            let last = self.share_last_reward_block.get(token_id).unwrap_or(now);
+            let blocks = (now as u128).saturating_sub(last as u128);
+            if blocks == 0 {
+                return;
+            }
+            let rate = self.share_reward_rate_bps.get(token_id).unwrap_or(0);
+            let reward = total.saturating_mul(rate).saturating_mul(blocks)
+                / Self::REWARD_RATE_PRECISION
+                / 5_256_000;
+            let acc = self.share_acc_reward_per_share.get(token_id).unwrap_or(0);
+            self.share_acc_reward_per_share.insert(
+                token_id,
+                &acc.saturating_add(reward.saturating_mul(Self::STAKE_SCALING) / total),
+            );
+            self.share_last_reward_block.insert(token_id, &now);
+        }
+
+        fn pending_stake_rewards(&self, stake: &ShareStakeInfo) -> u128 {
+            let acc = self
+                .share_acc_reward_per_share
+                .get(stake.token_id)
+                .unwrap_or(0);
+            let base = stake
+                .amount
+                .saturating_mul(acc.saturating_sub(stake.reward_debt))
+                / Self::STAKE_SCALING;
+            base.saturating_mul(stake.lock_period.multiplier()) / 100
+        }
+
+        fn governance_weight(&self, voter: AccountId, token_id: TokenId) -> u128 {
+            if let Some(stake) = self.share_stakes.get((voter, token_id)) {
+                stake.amount.saturating_mul(stake.lock_period.multiplier()) / 100
+            } else {
+                self.balances.get((voter, token_id)).unwrap_or(0)
+            }
+        }
+
+        // =========================================================================
+        // Vesting Methods
+        // =========================================================================
+
+        /// Creates a vesting schedule for an account
+        #[ink(message)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_vesting_schedule(
+            &mut self,
+            token_id: TokenId,
+            account: AccountId,
+            role: VestingRole,
+            total_amount: u128,
+            start_time: u64,
+            cliff_duration: u64,
+            vesting_duration: u64,
+        ) -> Result<(), Error> {
+            let caller = self.env().caller();
+            let owner = self.token_owner.get(token_id).ok_or(Error::TokenNotFound)?;
+            if caller != self.admin && caller != owner {
+                return Err(Error::Unauthorized);
+            }
+            if total_amount == 0 {
+                return Err(Error::InvalidAmount);
+            }
+            if self.vesting_schedules.get((token_id, account)).is_some() {
+                return Err(Error::Unauthorized);
+            }
+
+            let creator_balance = self.balances.get((caller, token_id)).unwrap_or(0);
+            if creator_balance < total_amount {
+                return Err(Error::Unauthorized);
+            }
+            self.balances
+                .insert((caller, token_id), &(creator_balance - total_amount));
+
+            let schedule = VestingSchedule {
+                role: role.clone(),
+                total_amount,
+                claimed_amount: 0,
+                start_time,
+                cliff_duration,
+                vesting_duration,
+            };
+
+            self.vesting_schedules
+                .insert((token_id, account), &schedule);
+
+            self.env().emit_event(VestingScheduleCreated {
+                token_id,
+                account,
+                role,
+                total_amount,
+                start_time,
+                cliff_duration,
+                vesting_duration,
+            });
+
+            Ok(())
+        }
+
+        /// Claims available vested tokens
+        #[ink(message)]
+        pub fn claim_vested_tokens(&mut self, token_id: TokenId) -> Result<(), Error> {
+            let caller = self.env().caller();
+            let mut schedule = self
+                .vesting_schedules
+                .get((token_id, caller))
+                .ok_or(Error::Unauthorized)?;
+
+            let current_time = self.env().block_timestamp();
+
+            let vested_amount = if current_time < schedule.start_time + schedule.cliff_duration {
+                0
+            } else if current_time >= schedule.start_time + schedule.vesting_duration {
+                schedule.total_amount
+            } else {
+                let time_vested = current_time - schedule.start_time;
+                (schedule.total_amount * time_vested as u128) / (schedule.vesting_duration as u128)
+            };
+
+            let claimable = vested_amount.saturating_sub(schedule.claimed_amount);
+            if claimable == 0 {
+                return Err(Error::InvalidAmount);
+            }
+
+            schedule.claimed_amount += claimable;
+            self.vesting_schedules.insert((token_id, caller), &schedule);
+
+            let current_balance = self.balances.get((caller, token_id)).unwrap_or(0);
+            self.balances
+                .insert((caller, token_id), &(current_balance + claimable));
+
+            self.env().emit_event(VestedTokensClaimed {
+                token_id,
+                account: caller,
+                amount: claimable,
+            });
+
+            Ok(())
+        }
+
+        /// Gets the vesting schedule for an account
+        #[ink(message)]
+        pub fn get_vesting_schedule(
+            &self,
+            token_id: TokenId,
+            account: AccountId,
+        ) -> Option<VestingSchedule> {
+            self.vesting_schedules.get((token_id, account))
+        }
+
+        /// Calculates the amount of tokens currently vested
+        #[ink(message)]
+        pub fn get_vested_amount(&self, token_id: TokenId, account: AccountId) -> u128 {
+            if let Some(schedule) = self.vesting_schedules.get((token_id, account)) {
+                let current_time = self.env().block_timestamp();
+                if current_time < schedule.start_time + schedule.cliff_duration {
+                    0
+                } else if current_time >= schedule.start_time + schedule.vesting_duration {
+                    schedule.total_amount
+                } else {
+                    let time_vested = current_time - schedule.start_time;
+                    (schedule.total_amount * time_vested as u128)
+                        / (schedule.vesting_duration as u128)
+                }
+            } else {
+                0
+            }
+        }
     }
 
     // Unit tests extracted to tests.rs (Issue #101)
+    include!("../tests.rs");
 }

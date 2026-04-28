@@ -1,5 +1,5 @@
-use ink::primitives::{AccountId, Hash};
 use ink::prelude::vec::Vec;
+use ink::primitives::{AccountId, Hash};
 
 use crate::constants::MIN_RANDOMNESS_PARTICIPANTS;
 use crate::crypto::{finalize_randomness, verify_commitment, CryptoError};
@@ -56,11 +56,18 @@ pub struct CommitRevealRound {
 // ── Round Lifecycle ─────────────────────────────────────────────────────────
 
 /// Create a new commitment-reveal round.
-pub fn create_round(round_id: u64, current_block: u32, commit_blocks: u32, reveal_blocks: u32) -> CommitRevealRound {
+pub fn create_round(
+    round_id: u64,
+    current_block: u32,
+    commit_blocks: u32,
+    reveal_blocks: u32,
+) -> CommitRevealRound {
     CommitRevealRound {
         round_id,
         commit_deadline: current_block.saturating_add(commit_blocks),
-        reveal_deadline: current_block.saturating_add(commit_blocks).saturating_add(reveal_blocks),
+        reveal_deadline: current_block
+            .saturating_add(commit_blocks)
+            .saturating_add(reveal_blocks),
         commits: Vec::new(),
         reveals: Vec::new(),
         final_random: None,
@@ -90,14 +97,17 @@ pub fn add_commit(
 }
 
 /// Transition round from committing to revealing phase.
-pub fn start_reveal_phase(round: &mut CommitRevealRound, current_block: u32) -> Result<(), CryptoError> {
+pub fn start_reveal_phase(
+    round: &mut CommitRevealRound,
+    current_block: u32,
+) -> Result<(), CryptoError> {
     if round.status != RandomnessStatus::Committing {
         return Err(CryptoError::InvalidRandomnessPhase);
     }
     if current_block <= round.commit_deadline {
         return Err(CryptoError::InvalidRandomnessPhase);
     }
-    if (round.commits.len() as u32) < MIN_RANDOMNESS_PARTICIPANTS {
+    if u32::try_from(round.commits.len()).unwrap_or(u32::MAX) < MIN_RANDOMNESS_PARTICIPANTS {
         round.status = RandomnessStatus::Failed;
         return Err(CryptoError::InsufficientReveals);
     }
@@ -137,7 +147,10 @@ pub fn add_reveal(
 }
 
 /// Finalize the round and compute the random value from all revealed secrets.
-pub fn finalize_round(round: &mut CommitRevealRound, current_block: u32) -> Result<Hash, CryptoError> {
+pub fn finalize_round(
+    round: &mut CommitRevealRound,
+    current_block: u32,
+) -> Result<Hash, CryptoError> {
     if round.status != RandomnessStatus::Revealing {
         return Err(CryptoError::InvalidRandomnessPhase);
     }
@@ -145,7 +158,7 @@ pub fn finalize_round(round: &mut CommitRevealRound, current_block: u32) -> Resu
         // Can only finalize after reveal deadline to prevent early finalization attacks
         return Err(CryptoError::InvalidRandomnessPhase);
     }
-    if (round.reveals.len() as u32) < MIN_RANDOMNESS_PARTICIPANTS {
+    if u32::try_from(round.reveals.len()).unwrap_or(u32::MAX) < MIN_RANDOMNESS_PARTICIPANTS {
         round.status = RandomnessStatus::Failed;
         return Err(CryptoError::InsufficientReveals);
     }

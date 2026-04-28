@@ -36,8 +36,11 @@ import type {
   PortfolioDetails,
   FractionalInfo,
   FeeOperation,
+  ClientOptions,
+  TxProgressCallback,
 } from '../types';
-import { PropChainError, TransactionError, decodeContractError } from '../utils/errors';
+import { TxProgressStatus } from '../types';
+import { PropChainError, TransactionError, decodeContractError, GasEstimationError } from '../utils/errors';
 import { decodeTransactionEvents, subscribeToNamedEvent } from '../utils/events';
 import type { PropChainEventName, PropChainEventMap } from '../types/events';
 
@@ -81,11 +84,13 @@ export class PropertyRegistryClient {
   private readonly api: ApiPromise;
   private readonly abi: Abi;
   private readonly contractAddress: string;
+  private readonly options: ClientOptions;
 
-  constructor(api: ApiPromise, contractAddress: string, abi: Abi) {
+  constructor(api: ApiPromise, contractAddress: string, abi: Abi, options?: ClientOptions) {
     this.api = api;
     this.abi = abi;
     this.contractAddress = contractAddress;
+    this.options = options ?? {};
     this.contract = new ContractPromise(api, abi, contractAddress);
   }
 
@@ -103,12 +108,14 @@ export class PropertyRegistryClient {
   async registerProperty(
     signer: Signer,
     metadata: PropertyMetadata,
+    onProgress?: TxProgressCallback,
   ): Promise<{ propertyId: number } & TxResult> {
     const encodedMetadata = this.encodePropertyMetadata(metadata);
     const txResult = await this.submitTx(
       signer,
       'register_property',
       [encodedMetadata],
+      onProgress,
     );
 
     // Extract property ID from events
@@ -166,8 +173,9 @@ export class PropertyRegistryClient {
     signer: Signer,
     propertyId: number,
     to: string,
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
-    return this.submitTx(signer, 'transfer_property', [propertyId, to]);
+    return this.submitTx(signer, 'transfer_property', [propertyId, to], onProgress);
   }
 
   /**
@@ -181,9 +189,10 @@ export class PropertyRegistryClient {
     signer: Signer,
     propertyId: number,
     metadata: PropertyMetadata,
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
     const encoded = this.encodePropertyMetadata(metadata);
-    return this.submitTx(signer, 'update_metadata', [propertyId, encoded]);
+    return this.submitTx(signer, 'update_metadata', [propertyId, encoded], onProgress);
   }
 
   /**
@@ -197,8 +206,9 @@ export class PropertyRegistryClient {
     signer: Signer,
     propertyId: number,
     to: string | null,
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
-    return this.submitTx(signer, 'approve', [propertyId, to]);
+    return this.submitTx(signer, 'approve', [propertyId, to], onProgress);
   }
 
   /**
@@ -231,13 +241,14 @@ export class PropertyRegistryClient {
     buyer: string,
     seller: string,
     amount: bigint,
+    onProgress?: TxProgressCallback,
   ): Promise<{ escrowId: number } & TxResult> {
-    const txResult = await this.submitTx(signer, 'create_escrow', [
-      propertyId,
-      buyer,
-      seller,
-      amount.toString(),
-    ]);
+    const txResult = await this.submitTx(
+      signer,
+      'create_escrow',
+      [propertyId, buyer, seller, amount.toString()],
+      onProgress,
+    );
 
     const escrowEvents = txResult.events.filter((e) => e.name === 'EscrowCreated');
     const escrowId = escrowEvents.length > 0
@@ -253,8 +264,12 @@ export class PropertyRegistryClient {
    * @param signer - Authorized account (seller or admin)
    * @param escrowId - Escrow to release
    */
-  async releaseEscrow(signer: Signer, escrowId: number): Promise<TxResult> {
-    return this.submitTx(signer, 'release_escrow', [escrowId]);
+  async releaseEscrow(
+    signer: Signer,
+    escrowId: number,
+    onProgress?: TxProgressCallback,
+  ): Promise<TxResult> {
+    return this.submitTx(signer, 'release_escrow', [escrowId], onProgress);
   }
 
   /**
@@ -263,8 +278,12 @@ export class PropertyRegistryClient {
    * @param signer - Authorized account
    * @param escrowId - Escrow to refund
    */
-  async refundEscrow(signer: Signer, escrowId: number): Promise<TxResult> {
-    return this.submitTx(signer, 'refund_escrow', [escrowId]);
+  async refundEscrow(
+    signer: Signer,
+    escrowId: number,
+    onProgress?: TxProgressCallback,
+  ): Promise<TxResult> {
+    return this.submitTx(signer, 'refund_escrow', [escrowId], onProgress);
   }
 
   /**
@@ -367,13 +386,14 @@ export class PropertyRegistryClient {
     badgeType: BadgeType,
     expiresAt: number | null,
     metadataUrl: string,
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
-    return this.submitTx(signer, 'issue_badge', [
-      propertyId,
-      badgeType,
-      expiresAt,
-      metadataUrl,
-    ]);
+    return this.submitTx(
+      signer,
+      'issue_badge',
+      [propertyId, badgeType, expiresAt, metadataUrl],
+      onProgress,
+    );
   }
 
   /**
@@ -384,8 +404,9 @@ export class PropertyRegistryClient {
     propertyId: number,
     badgeType: BadgeType,
     reason: string,
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
-    return this.submitTx(signer, 'revoke_badge', [propertyId, badgeType, reason]);
+    return this.submitTx(signer, 'revoke_badge', [propertyId, badgeType, reason], onProgress);
   }
 
   /**
@@ -404,12 +425,14 @@ export class PropertyRegistryClient {
     propertyId: number,
     badgeType: BadgeType,
     evidenceUrl: string,
+    onProgress?: TxProgressCallback,
   ): Promise<{ requestId: number } & TxResult> {
-    const txResult = await this.submitTx(signer, 'request_verification', [
-      propertyId,
-      badgeType,
-      evidenceUrl,
-    ]);
+    const txResult = await this.submitTx(
+      signer,
+      'request_verification',
+      [propertyId, badgeType, evidenceUrl],
+      onProgress,
+    );
     const events = txResult.events.filter((e) => e.name === 'VerificationRequested');
     const requestId = events.length > 0 ? (events[0].args.requestId as number) : 0;
     return { requestId, ...txResult };
@@ -426,22 +449,23 @@ export class PropertyRegistryClient {
     signer: Signer,
     reason: string,
     autoResumeAt: number | null,
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
-    return this.submitTx(signer, 'pause_contract', [reason, autoResumeAt]);
+    return this.submitTx(signer, 'pause_contract', [reason, autoResumeAt], onProgress);
   }
 
   /**
    * Requests resuming the contract.
    */
-  async requestResume(signer: Signer): Promise<TxResult> {
-    return this.submitTx(signer, 'request_resume', []);
+  async requestResume(signer: Signer, onProgress?: TxProgressCallback): Promise<TxResult> {
+    return this.submitTx(signer, 'request_resume', [], onProgress);
   }
 
   /**
    * Approves a resume request.
    */
-  async approveResume(signer: Signer): Promise<TxResult> {
-    return this.submitTx(signer, 'approve_resume', []);
+  async approveResume(signer: Signer, onProgress?: TxProgressCallback): Promise<TxResult> {
+    return this.submitTx(signer, 'approve_resume', [], onProgress);
   }
 
   /**
@@ -462,9 +486,10 @@ export class PropertyRegistryClient {
   async batchRegisterProperties(
     signer: Signer,
     metadataList: PropertyMetadata[],
+    onProgress?: TxProgressCallback,
   ): Promise<{ batchResult: BatchResult } & TxResult> {
     const encoded = metadataList.map((m) => this.encodePropertyMetadata(m));
-    const txResult = await this.submitTx(signer, 'batch_register_properties', [encoded]);
+    const txResult = await this.submitTx(signer, 'batch_register_properties', [encoded], onProgress);
     return { batchResult: {} as BatchResult, ...txResult };
   }
 
@@ -475,8 +500,9 @@ export class PropertyRegistryClient {
     signer: Signer,
     propertyIds: number[],
     to: string,
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
-    return this.submitTx(signer, 'batch_transfer_properties', [propertyIds, to]);
+    return this.submitTx(signer, 'batch_transfer_properties', [propertyIds, to], onProgress);
   }
 
   /**
@@ -514,22 +540,22 @@ export class PropertyRegistryClient {
   /**
    * Changes the admin account.
    */
-  async changeAdmin(signer: Signer, newAdmin: string): Promise<TxResult> {
-    return this.submitTx(signer, 'change_admin', [newAdmin]);
+  async changeAdmin(signer: Signer, newAdmin: string, onProgress?: TxProgressCallback): Promise<TxResult> {
+    return this.submitTx(signer, 'change_admin', [newAdmin], onProgress);
   }
 
   /**
    * Sets the oracle contract address.
    */
-  async setOracle(signer: Signer, oracleAddress: string): Promise<TxResult> {
-    return this.submitTx(signer, 'set_oracle', [oracleAddress]);
+  async setOracle(signer: Signer, oracleAddress: string, onProgress?: TxProgressCallback): Promise<TxResult> {
+    return this.submitTx(signer, 'set_oracle', [oracleAddress], onProgress);
   }
 
   /**
    * Sets the fee manager contract address.
    */
-  async setFeeManager(signer: Signer, feeManager: string | null): Promise<TxResult> {
-    return this.submitTx(signer, 'set_fee_manager', [feeManager]);
+  async setFeeManager(signer: Signer, feeManager: string | null, onProgress?: TxProgressCallback): Promise<TxResult> {
+    return this.submitTx(signer, 'set_fee_manager', [feeManager], onProgress);
   }
 
   // ==========================================================================
@@ -622,6 +648,7 @@ export class PropertyRegistryClient {
     signer: Signer,
     method: string,
     args: unknown[],
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
     const signerAddress = typeof signer === 'string' ? signer : signer.address;
 
@@ -639,7 +666,8 @@ export class PropertyRegistryClient {
 
     if (dryRunResult.isErr) {
       const errorVariant = dryRunResult.asErr?.toString() ?? 'Unknown';
-      throw decodeContractError(errorVariant);
+      const cause = decodeContractError(errorVariant);
+      throw new GasEstimationError(method, cause);
     }
 
     // Submit the actual transaction
@@ -648,8 +676,11 @@ export class PropertyRegistryClient {
       throw new Error(`Unknown tx method: ${method}`);
     }
 
+    // Apply safety buffer to estimated gas
+    const gasLimit = await this.applyGasBuffer(BigInt(gasRequired?.toString() ?? '0'));
+
     return new Promise<TxResult>((resolve, reject) => {
-      const tx = txFn({ gasLimit: gasRequired }, ...args);
+      const tx = txFn({ gasLimit }, ...args);
 
       const signOptions = typeof signer === 'string' ? {} : undefined;
 
@@ -657,7 +688,26 @@ export class PropertyRegistryClient {
         signer as KeyringPair,
         signOptions ?? {},
         ({ status, events: rawEvents, dispatchError }) => {
+          if (status.isReady && onProgress) {
+            onProgress({ status: TxProgressStatus.Ready, txHash: tx.hash.toString() });
+          } else if (status.isBroadcast && onProgress) {
+            onProgress({ status: TxProgressStatus.Broadcast, txHash: tx.hash.toString() });
+          } else if (status.isInBlock && onProgress) {
+            onProgress({
+              status: TxProgressStatus.InBlock,
+              txHash: tx.hash.toString(),
+              blockHash: status.asInBlock.toString()
+            });
+          }
+
           if (dispatchError) {
+            if (onProgress) {
+              onProgress({
+                status: TxProgressStatus.Error,
+                txHash: tx.hash.toString(),
+                message: dispatchError.toString()
+              });
+            }
             reject(
               new TransactionError(
                 `Transaction failed: ${dispatchError.toString()}`,
@@ -670,6 +720,14 @@ export class PropertyRegistryClient {
 
           if (status.isFinalized) {
             const blockHash = status.asFinalized.toString();
+            if (onProgress) {
+              onProgress({
+                status: TxProgressStatus.Finalized,
+                txHash: tx.hash.toString(),
+                blockHash
+              });
+            }
+            
             const decodedEvents: ContractEvent[] = decodeTransactionEvents(
               this.abi,
               rawEvents as unknown as Array<{
@@ -722,5 +780,41 @@ export class PropertyRegistryClient {
       },
       registeredAt: data.registered_at as number,
     };
+  }
+
+  /**
+   * Applies a safety buffer to the estimated gas required for a transaction.
+   * If autoAdjustGas is enabled, the buffer scales with network congestion.
+   */
+  private async applyGasBuffer(estimatedGas: bigint): Promise<bigint> {
+    let bufferPercentage = this.options.gasBufferPercentage ?? 10;
+
+    if (this.options.autoAdjustGas) {
+      try {
+        // Dynamic adjustment based on contract health and metrics
+        const health = await this.healthCheck();
+        if (health && health.isHealthy) {
+          // Increase buffer if we're near the current block's target or if paused/recovering
+          if (health.isPaused) {
+            bufferPercentage += 20; // Extra safety during maintenance/pause
+          }
+
+          const metrics = await this.getGasMetrics();
+          if (metrics && metrics.averageOperationGas > 0) {
+            const utilizationRatio =
+              Number(metrics.lastOperationGas) / metrics.averageOperationGas;
+            if (utilizationRatio > 1.5) {
+              bufferPercentage += 15; // High volatility detected
+            }
+          }
+        }
+      } catch (error) {
+        // Fallback to default buffer if metrics lookup fails
+        console.warn('Failed to fetch gas metrics for auto-adjustment, using default buffer.');
+      }
+    }
+
+    const buffer = (estimatedGas * BigInt(bufferPercentage)) / 100n;
+    return estimatedGas + buffer;
   }
 }

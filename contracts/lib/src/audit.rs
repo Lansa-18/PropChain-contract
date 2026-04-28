@@ -82,6 +82,7 @@ impl AuditTrail {
     ///
     /// Computes a Blake2x256 hash that chains to the previous record,
     /// stores the record, and updates secondary indices.
+    #[allow(clippy::too_many_arguments)]
     pub fn log_event(
         &mut self,
         actor: AccountId,
@@ -166,7 +167,12 @@ impl AuditTrail {
     }
 
     /// Get record IDs for a specific event type (paginated).
-    pub fn get_type_records(&self, event_type: SecurityEventType, offset: u64, limit: u64) -> Vec<u64> {
+    pub fn get_type_records(
+        &self,
+        event_type: SecurityEventType,
+        offset: u64,
+        limit: u64,
+    ) -> Vec<u64> {
         let type_key = event_type as u8;
         let count = self.type_record_count.get(type_key).unwrap_or(0);
         let mut result = Vec::new();
@@ -233,6 +239,7 @@ impl AuditTrail {
     }
 
     /// Compute Blake2x256 hash for a new record, chaining with the previous hash.
+    #[allow(clippy::too_many_arguments)]
     fn compute_record_hash(
         &self,
         id: u64,

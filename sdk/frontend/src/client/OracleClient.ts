@@ -21,8 +21,11 @@ import type {
   OracleSource,
   TxResult,
   ContractEvent,
+  ClientOptions,
+  TxProgressCallback,
 } from '../types';
-import { decodeContractError, TransactionError } from '../utils/errors';
+import { TxProgressStatus } from '../types';
+import { decodeContractError, TransactionError, GasEstimationError } from '../utils/errors';
 import { decodeTransactionEvents } from '../utils/events';
 
 export type Signer = KeyringPair | string;
@@ -48,11 +51,13 @@ export class OracleClient {
   private readonly api: ApiPromise;
   private readonly abi: Abi;
   private readonly contractAddress: string;
+  private readonly options: ClientOptions;
 
-  constructor(api: ApiPromise, contractAddress: string, abi: Abi) {
+  constructor(api: ApiPromise, contractAddress: string, abi: Abi, options?: ClientOptions) {
     this.api = api;
     this.abi = abi;
     this.contractAddress = contractAddress;
+    this.options = options ?? {};
     this.contract = new ContractPromise(api, abi, contractAddress);
   }
 
@@ -128,8 +133,9 @@ export class OracleClient {
   async requestValuation(
     signer: Signer,
     propertyId: number,
+    onProgress?: TxProgressCallback,
   ): Promise<{ requestId: number } & TxResult> {
-    const txResult = await this.submitTx(signer, 'request_valuation', [propertyId]);
+    const txResult = await this.submitTx(signer, 'request_valuation', [propertyId], onProgress);
     return { requestId: 0, ...txResult };
   }
 
@@ -142,8 +148,9 @@ export class OracleClient {
   async batchRequestValuations(
     signer: Signer,
     propertyIds: number[],
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
-    return this.submitTx(signer, 'batch_request_valuations', [propertyIds]);
+    return this.submitTx(signer, 'batch_request_valuations', [propertyIds], onProgress);
   }
 
   // ==========================================================================
@@ -153,15 +160,15 @@ export class OracleClient {
   /**
    * Adds an oracle source (admin only).
    */
-  async addSource(signer: Signer, source: OracleSource): Promise<TxResult> {
-    return this.submitTx(signer, 'add_source', [source]);
+  async addSource(signer: Signer, source: OracleSource, onProgress?: TxProgressCallback): Promise<TxResult> {
+    return this.submitTx(signer, 'add_source', [source], onProgress);
   }
 
   /**
    * Removes an oracle source (admin only).
    */
-  async removeSource(signer: Signer, sourceId: string): Promise<TxResult> {
-    return this.submitTx(signer, 'remove_source', [sourceId]);
+  async removeSource(signer: Signer, sourceId: string, onProgress?: TxProgressCallback): Promise<TxResult> {
+    return this.submitTx(signer, 'remove_source', [sourceId], onProgress);
   }
 
   /**
@@ -208,6 +215,7 @@ export class OracleClient {
     signer: Signer,
     method: string,
     args: unknown[],
+    onProgress?: TxProgressCallback,
   ): Promise<TxResult> {
     const signerAddress = typeof signer === 'string' ? signer : signer.address;
 
@@ -224,7 +232,8 @@ export class OracleClient {
 
     if (dryRunResult.isErr) {
       const errorVariant = dryRunResult.asErr?.toString() ?? 'Unknown';
-      throw decodeContractError(errorVariant);
+      const cause = decodeContractError(errorVariant);
+      throw new GasEstimationError(method, cause);
     }
 
     const txFn = this.contract.tx[method];
@@ -232,14 +241,36 @@ export class OracleClient {
       throw new Error(`Unknown tx method: ${method}`);
     }
 
+    // Apply safety buffer to estimated gas
+    const gasLimit = await this.applyGasBuffer(BigInt(gasRequired?.toString() ?? '0'));
+
     return new Promise<TxResult>((resolve, reject) => {
-      const tx = txFn({ gasLimit: gasRequired }, ...args);
+      const tx = txFn({ gasLimit }, ...args);
 
       tx.signAndSend(
         signer as KeyringPair,
         {},
         ({ status, events: rawEvents, dispatchError }) => {
+          if (status.isReady && onProgress) {
+            onProgress({ status: TxProgressStatus.Ready, txHash: tx.hash.toString() });
+          } else if (status.isBroadcast && onProgress) {
+            onProgress({ status: TxProgressStatus.Broadcast, txHash: tx.hash.toString() });
+          } else if (status.isInBlock && onProgress) {
+            onProgress({
+              status: TxProgressStatus.InBlock,
+              txHash: tx.hash.toString(),
+              blockHash: status.asInBlock.toString()
+            });
+          }
+
           if (dispatchError) {
+            if (onProgress) {
+              onProgress({
+                status: TxProgressStatus.Error,
+                txHash: tx.hash.toString(),
+                message: dispatchError.toString()
+              });
+            }
             reject(
               new TransactionError(
                 `Transaction failed: ${dispatchError.toString()}`,
@@ -252,6 +283,14 @@ export class OracleClient {
 
           if (status.isFinalized) {
             const blockHash = status.asFinalized.toString();
+            if (onProgress) {
+              onProgress({
+                status: TxProgressStatus.Finalized,
+                txHash: tx.hash.toString(),
+                blockHash
+              });
+            }
+
             const decodedEvents: ContractEvent[] = decodeTransactionEvents(
               this.abi,
               rawEvents as unknown as Array<{
@@ -271,5 +310,14 @@ export class OracleClient {
         },
       ).catch(reject);
     });
+  }
+
+  /**
+   * Applies a safety buffer to the estimated gas required for a transaction.
+   */
+  private async applyGasBuffer(estimatedGas: bigint): Promise<bigint> {
+    const bufferPercentage = this.options.gasBufferPercentage ?? 10;
+    const buffer = (estimatedGas * BigInt(bufferPercentage)) / 100n;
+    return estimatedGas + buffer;
   }
 }

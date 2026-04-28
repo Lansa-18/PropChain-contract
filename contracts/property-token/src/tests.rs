@@ -423,4 +423,243 @@ mod tests {
         contract.clear_management_agent(token_id).expect("clear");
         assert_eq!(contract.get_management_agent(token_id), None);
     }
+
+    // ── Staking tests (Issue #197) ─────────────────────────────────────────
+
+    fn setup_token_with_shares(amount: u128) -> (PropertyToken, TokenId) {
+        let mut contract = setup_contract();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        let metadata = PropertyMetadata {
+            location: String::from("1 Stake St"),
+            size: 500,
+            legal_description: String::from("Staking test property"),
+            valuation: 100000,
+            documents_url: String::from("ipfs://stake"),
+        };
+        let token_id = contract
+            .register_property_with_token(metadata)
+            .expect("register");
+        contract
+            .issue_shares(token_id, accounts.alice, amount)
+            .expect("issue shares");
+        (contract, token_id)
+    }
+
+    #[ink::test]
+    fn test_stake_shares_success() {
+        // register_property_with_token seeds balance with 1; issue 999 more → 1000 total
+        let (mut contract, token_id) = setup_token_with_shares(999);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        contract
+            .stake_shares(token_id, 500, ShareLockPeriod::Flexible)
+            .expect("stake");
+
+        let stake = contract
+            .get_share_stake(accounts.alice, token_id)
+            .expect("stake record");
+        assert_eq!(stake.amount, 500);
+        assert_eq!(contract.share_balance_of(accounts.alice, token_id), 500);
+    }
+
+    #[ink::test]
+    fn test_stake_zero_amount_fails() {
+        let (mut contract, token_id) = setup_token_with_shares(1000);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        let result = contract.stake_shares(token_id, 0, ShareLockPeriod::Flexible);
+        assert_eq!(result, Err(Error::InvalidAmount));
+    }
+
+    #[ink::test]
+    fn test_stake_insufficient_balance_fails() {
+        let (mut contract, token_id) = setup_token_with_shares(100);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        let result = contract.stake_shares(token_id, 200, ShareLockPeriod::Flexible);
+    #[ink::test]
+    fn test_batch_transfer_success() {
+        let mut contract = setup_contract();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        // Mint shares for two tokens
+        let token_id_1: TokenId = 1;
+        let token_id_2: TokenId = 2;
+        contract.balances.insert((&accounts.alice, &token_id_1), &100u128);
+        contract.balances.insert((&accounts.alice, &token_id_2), &200u128);
+
+        let result = contract.safe_batch_transfer_from(
+            accounts.alice,
+            accounts.bob,
+            vec![token_id_1, token_id_2],
+            vec![50u128, 100u128],
+            vec![],
+        );
+        assert!(result.is_ok());
+        assert_eq!(contract.balances.get((&accounts.alice, &token_id_1)).unwrap_or(0), 50);
+        assert_eq!(contract.balances.get((&accounts.bob, &token_id_2)).unwrap_or(0), 100);
+    }
+
+    #[ink::test]
+    fn test_batch_transfer_length_mismatch() {
+        let mut contract = setup_contract();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        let result = contract.safe_batch_transfer_from(
+            accounts.alice,
+            accounts.bob,
+            vec![1u64, 2u64],
+            vec![10u128],  // mismatched length
+            vec![],
+        );
+        assert_eq!(result, Err(Error::LengthMismatch));
+    }
+
+    #[ink::test]
+    fn test_batch_transfer_insufficient_balance() {
+        let mut contract = setup_contract();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        contract.balances.insert((&accounts.alice, &1u64), &10u128);
+
+        let result = contract.safe_batch_transfer_from(
+            accounts.alice,
+            accounts.bob,
+            vec![1u64],
+            vec![999u128],  // more than balance
+            vec![],
+        );
+        assert_eq!(result, Err(Error::InsufficientBalance));
+    }
+
+    #[ink::test]
+    fn test_stake_already_staked_fails() {
+        let (mut contract, token_id) = setup_token_with_shares(1000);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        contract
+            .stake_shares(token_id, 500, ShareLockPeriod::Flexible)
+            .expect("first stake");
+        let result = contract.stake_shares(token_id, 100, ShareLockPeriod::Flexible);
+        assert_eq!(result, Err(Error::AlreadyStaked));
+    }
+
+    #[ink::test]
+    fn test_unstake_lock_active_fails() {
+        let (mut contract, token_id) = setup_token_with_shares(1000);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        contract
+            .stake_shares(token_id, 500, ShareLockPeriod::ThirtyDays)
+            .expect("stake");
+        let result = contract.unstake_shares(token_id);
+        assert_eq!(result, Err(Error::LockActive));
+    }
+
+    #[ink::test]
+    fn test_unstake_flexible_succeeds() {
+        // register_property_with_token seeds balance with 1; issue 999 more → 1000 total
+        let (mut contract, token_id) = setup_token_with_shares(999);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        contract
+            .stake_shares(token_id, 600, ShareLockPeriod::Flexible)
+            .expect("stake");
+        contract.unstake_shares(token_id).expect("unstake");
+
+        assert!(contract.get_share_stake(accounts.alice, token_id).is_none());
+        assert_eq!(contract.share_balance_of(accounts.alice, token_id), 1000);
+    }
+
+    #[ink::test]
+    fn test_unstake_not_staked_fails() {
+        let (mut contract, token_id) = setup_token_with_shares(1000);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        let result = contract.unstake_shares(token_id);
+        assert_eq!(result, Err(Error::StakeNotFound));
+    }
+
+    #[ink::test]
+    fn test_claim_rewards_no_stake_fails() {
+        let (mut contract, token_id) = setup_token_with_shares(1000);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        let result = contract.claim_stake_rewards(token_id);
+        assert_eq!(result, Err(Error::StakeNotFound));
+    }
+
+    #[ink::test]
+    fn test_governance_weight_non_staker() {
+        // register_property_with_token seeds balance with 1; issue 799 more → 800 total
+        let (contract, token_id) = setup_token_with_shares(799);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+
+        let weight = contract.get_governance_weight(accounts.alice, token_id);
+        assert_eq!(weight, 800);
+    }
+
+    #[ink::test]
+    fn test_governance_weight_staker_boosted() {
+        let (mut contract, token_id) = setup_token_with_shares(1000);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        contract
+            .stake_shares(token_id, 1000, ShareLockPeriod::OneYear)
+            .expect("stake");
+
+        // MULTIPLIER_1_YEAR = 300 (3×); 1000 * 300 / 100 = 3000
+        let weight = contract.get_governance_weight(accounts.alice, token_id);
+        assert_eq!(weight, 3000);
+    }
+
+    #[ink::test]
+    fn test_vote_uses_boosted_weight() {
+        let (mut contract, token_id) = setup_token_with_shares(1000);
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.alice);
+
+        contract
+            .stake_shares(token_id, 1000, ShareLockPeriod::OneYear)
+            .expect("stake");
+
+        // Quorum of 2500 — unreachable with raw balance (1000) but met with 3× boost (3000)
+        let proposal_id = contract
+            .create_proposal(token_id, 2500, Hash::from([9u8; 32]))
+            .expect("proposal");
+        contract.vote(token_id, proposal_id, true).expect("vote");
+
+        let proposal = contract
+            .get_proposal(token_id, proposal_id)
+            .expect("proposal exists");
+        assert!(
+            proposal.for_votes >= 2500,
+            "boosted votes should meet quorum"
+        );
+    fn test_batch_transfer_unauthorized() {
+        let mut contract = setup_contract();
+        let accounts = test::default_accounts::<DefaultEnvironment>();
+        test::set_caller::<DefaultEnvironment>(accounts.bob); // bob tries to move alice's tokens
+
+        let result = contract.safe_batch_transfer_from(
+            accounts.alice,
+            accounts.bob,
+            vec![1u64],
+            vec![10u128],
+            vec![],
+        );
+        assert_eq!(result, Err(Error::Unauthorized));
+    }
 }

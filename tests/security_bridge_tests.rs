@@ -56,12 +56,15 @@ fn sec_br01_non_operator_cannot_receive_bridged_token() {
     // charlie is not a bridge operator
     test::set_caller::<DefaultEnvironment>(accounts.charlie);
     let result = contract.receive_bridged_token(
-        2,              // source chain
-        1,              // original token id
-        accounts.django,  // recipient
+        2,               // source chain
+        1,               // original token id
+        accounts.django, // recipient
         PropertyMetadata {
-            location: String::from("Bridge"), size: 100,
-            legal_description: String::from(""), valuation: 100, documents_url: String::from("")
+            location: String::from("Bridge"),
+            size: 100,
+            legal_description: String::from(""),
+            valuation: 100,
+            documents_url: String::from(""),
         },
         ink::primitives::Hash::from([0u8; 32]), // tx_hash
     );

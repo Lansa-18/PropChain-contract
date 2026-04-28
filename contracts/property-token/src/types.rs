@@ -155,3 +155,120 @@ pub struct TaxRecord {
     pub shares_sold: u128,
     pub proceeds: u128,
 }
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    scale::Encode,
+    scale::Decode,
+    ink::storage::traits::StorageLayout,
+)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+pub enum VestingRole {
+    Team,
+    Investor,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    scale::Encode,
+    scale::Decode,
+    ink::storage::traits::StorageLayout,
+)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+pub struct VestingSchedule {
+    pub role: VestingRole,
+    pub total_amount: u128,
+    pub claimed_amount: u128,
+    pub start_time: u64,
+    pub cliff_duration: u64,
+    pub vesting_duration: u64,
+}
+
+/// Snapshot for governance voting (Issue #194)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    scale::Encode,
+    scale::Decode,
+    ink::storage::traits::StorageLayout,
+)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+pub struct Snapshot {
+    pub id: u64,
+    pub token_id: TokenId,
+    pub created_at: u64,
+    pub total_supply_at_snapshot: u128,
+    pub description: String, // Optional description of why snapshot was taken
+}
+
+
+/// Lock period for staking shares (Issue #197)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    scale::Encode,
+    scale::Decode,
+    ink::storage::traits::StorageLayout,
+)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+pub enum LockPeriod {
+    Flexible,
+    ThirtyDays,
+    NinetyDays,
+    OneYear,
+}
+
+impl LockPeriod {
+    /// Returns the duration in blocks for this lock period
+    /// Assuming ~6 second block time: 1 day ≈ 14,400 blocks
+    pub fn duration_blocks(&self) -> u64 {
+        match self {
+            LockPeriod::Flexible => 0,
+            LockPeriod::ThirtyDays => 30 * 14_400,
+            LockPeriod::NinetyDays => 90 * 14_400,
+            LockPeriod::OneYear => 365 * 14_400,
+        }
+    }
+
+    /// Returns the reward multiplier for this lock period (in percentage)
+    pub fn multiplier(&self) -> u128 {
+        match self {
+            LockPeriod::Flexible => 100,      // 1x
+            LockPeriod::ThirtyDays => 110,    // 1.1x
+            LockPeriod::NinetyDays => 125,    // 1.25x
+            LockPeriod::OneYear => 150,       // 1.5x
+        }
+    }
+}
+
+/// Staking information for fractional shares (Issue #197)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    scale::Encode,
+    scale::Decode,
+    ink::storage::traits::StorageLayout,
+)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+pub struct ShareStakeInfo {
+    pub staker: AccountId,
+    pub token_id: TokenId,
+    pub amount: u128,
+    pub staked_at: u64,
+    pub lock_until: u64,
+    pub lock_period: LockPeriod,
+    pub reward_debt: u128,
+}
